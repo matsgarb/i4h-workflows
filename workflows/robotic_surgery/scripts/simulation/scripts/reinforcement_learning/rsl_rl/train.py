@@ -9,8 +9,13 @@
 
 import argparse
 import sys
-
+from collections import deque
 from isaaclab.app import AppLauncher
+import rsl_rl.modules as modules
+import rsl_rl.runners.on_policy_runner  as runner_module
+from tensordict import TensorDict
+print(f"[INFO] Imported rsl_rl.modules: {dir(modules)}")
+print(f"[INFO] Imported rsl_rl.runners.on_policy_runner: {dir(runner_module)}")
 
 # local imports
 import cli_args  # isort: skip
@@ -45,6 +50,7 @@ sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+
 """Rest everything follows."""
 
 import os
@@ -72,12 +78,23 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
+import rsl_rl.algorithms.ppo as new_ppo
+import importlib
+print(f"[DEBUG] PPO path loaded manually: {new_ppo.__file__}")
+
+try:
+    old_ppo = importlib.import_module("rsl_rl.algorithms_old.ppo")
+    print(f"[DEBUG] WARNING: algorithms_old is still importable from: {old_ppo.__file__}")
+except ImportError:
+    print("[DEBUG] Good: algorithms_old is no longer in the search path.")
+    
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
-    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    # RSL-RL uses PPO (Proximal Policy Optimization)
+    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli) # training parameters into it: network, optimization, PPO hyperparams, device, logging ... (info = how to train policy)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -103,6 +120,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+
     # wrap for video recording
     if args_cli.video:
         video_kwargs = {
@@ -121,7 +139,64 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env)
+    
+    
+    # ########## NEW RSL_RL STATE BASED RL ##########
+    # from tensordict import TensorDict
+    # def ensure_tensordict(data):
+    #     obs = data[0] if isinstance(data, tuple) else data
+    #     if isinstance(obs, TensorDict): return obs
+    #     if isinstance(obs, dict): return TensorDict(obs, batch_size=env.num_envs)
+    #     return TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
+    # original_get_obs = env.get_observations
+    # original_step = env.step
+    # env.get_observations = lambda: ensure_tensordict(original_get_obs())
+    
+    # def patched_step(actions):
+    #     obs, rewards, dones, extras = original_step(actions)
+    #     return ensure_tensordict(obs), rewards, dones, extras
+    # env.step = patched_step
+    # ##############################################
+    
 
+    # ########## NEW RSL_RL IMAGE-READY PATCH ##########
+    from tensordict import TensorDict
+
+    def ensure_tensordict(data):
+        obs = data[0] if isinstance(data, tuple) else data
+        if isinstance(obs, TensorDict):
+            td = obs.to(agent_cfg.device)
+        
+        elif isinstance(obs, dict):
+            td = TensorDict(obs, batch_size=env.num_envs).to(agent_cfg.device)
+
+        else:
+            td = TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
+
+        for key in list(td.keys()):
+           
+            if len(td[key].shape) == 4 and td[key].shape[-1] in [3, 4]:
+
+                td[key] = td[key].permute(0, 3, 1, 2).float() / 255.0
+
+        if "dummy_state" not in td.keys():
+            td["dummy_state"] = torch.zeros((env.num_envs, 0), device=agent_cfg.device)
+            
+        return td
+
+    original_get_obs = env.get_observations
+    original_step = env.step
+
+    env.get_observations = lambda: ensure_tensordict(original_get_obs())
+    
+    def patched_step(actions):
+        obs, rewards, dones, extras = original_step(actions)
+        return ensure_tensordict(obs), rewards, dones, extras
+    
+    env.step = patched_step
+    # ---------------------------------------------
+    # #################################################
+    
     # create runner from rsl-rl
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
