@@ -26,35 +26,35 @@ parser = argparse.ArgumentParser(description="Reach state machine for psm platfo
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.") # default = num of envs
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
 
 # launch omniverse app
-app_launcher = AppLauncher(headless=args_cli.headless, livestream=args_cli.livestream)
+app_launcher = AppLauncher(headless=args_cli.headless, livestream=args_cli.livestream) # HEADLESS = runs a program or browser without a graphical user interface (GUI), it operates in the background without a visual window
 simulation_app = app_launcher.app
 
 """Rest everything else."""
 
 from collections.abc import Sequence
 
-import gymnasium as gym
+import gymnasium as gym # to create physical env
 import robotic.surgery.tasks  # noqa: F401
 import torch
-import warp as wp
-from isaaclab.assets import RigidObject
-from isaaclab.utils.math import subtract_frame_transforms
+import warp as wp # for writing high-performance simulation and graphics code
+from isaaclab.assets import RigidObject # rigid body is described by its pose, velocity and mass distribution
+from isaaclab.utils.math import subtract_frame_transforms # to have pose in different referent systems
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
-from robotic.surgery.tasks.surgical.reach.reach_env_cfg import ReachEnvCfg
+from robotic.surgery.tasks.surgical.reach.reach_env_cfg import ReachEnvCfg # task: Reach
 
 # initialize warp
 wp.init()
 
 
 class ReachSmState:
-    """States for the reach state machine."""
+    """States for the reach state machine (rest position or action/reach the target)."""
 
     REST = wp.constant(0)
     REACH = wp.constant(1)
@@ -67,29 +67,29 @@ class ReachSmWaitTime:
     REACH = wp.constant(1.0)
 
 
-@wp.kernel
+@wp.kernel 
 def infer_state_machine(
-    dt: wp.array(dtype=float),
-    sm_state: wp.array(dtype=int),
+    dt: wp.array(dtype=float), # time-step for each env
+    sm_state: wp.array(dtype=int), # current state
     sm_wait_time: wp.array(dtype=float),
     ee_pose: wp.array(dtype=wp.transform),
-    des_final_pose: wp.array(dtype=wp.transform),
+    des_final_pose: wp.array(dtype=wp.transform), # target pose 
     des_ee_pose: wp.array(dtype=wp.transform),
 ):
     # retrieve thread id
-    tid = wp.tid()
+    tid = wp.tid() 
     # retrieve state machine state
     state = sm_state[tid]
     # decide next state
     if state == ReachSmState.REST:
-        des_ee_pose[tid] = ee_pose[tid]
+        des_ee_pose[tid] = ee_pose[tid] # if REST: des pose = current pose (stay still, stay in the REST position)
         # wait for a while
-        if sm_wait_time[tid] >= ReachSmWaitTime.REST:
+        if sm_wait_time[tid] >= ReachSmWaitTime.REST: # when REST time passes, next state 
             # move to next state and reset wait time
             sm_state[tid] = ReachSmState.REACH
             sm_wait_time[tid] = 0.0
     elif state == ReachSmState.REACH:
-        des_ee_pose[tid] = des_final_pose[tid]
+        des_ee_pose[tid] = des_final_pose[tid] # move to the desired pose
         # TODO: error between current and desired ee pose below threshold
         # wait for a while
         if sm_wait_time[tid] >= ReachSmWaitTime.REACH:
@@ -123,12 +123,12 @@ class ReachSm:
         self.dt = float(dt)
         self.num_envs = num_envs
         self.device = device
-        # initialize state machine
-        self.sm_dt = torch.full((self.num_envs,), self.dt, device=self.device)
+        # initialize state machine (for each env create a torch vector dt, state and timer)
+        self.sm_dt = torch.full((self.num_envs,), self.dt, device=self.device) # dt between 2 control steps
         self.sm_state = torch.full((self.num_envs,), 0, dtype=torch.int32, device=self.device)
-        self.sm_wait_time = torch.zeros((self.num_envs,), device=self.device)
+        self.sm_wait_time = torch.zeros((self.num_envs,), device=self.device) # time passed
 
-        # desired state
+        # desired state (pose expressed as quaternion 4 + 3 position x,y,z)
         self.des_ee_pose = torch.zeros((self.num_envs, 7), device=self.device)
 
         # convert to warp
@@ -171,7 +171,7 @@ class ReachSm:
 
         # convert transformations back to (w, x, y, z)
         des_ee_pose = self.des_ee_pose[:, [0, 1, 2, 6, 3, 4, 5]]
-        # convert to torch
+        # convert to torchimport
         return des_ee_pose
 
 
@@ -185,12 +185,18 @@ def main():
     )
     # create environment
     env = gym.make("Isaac-Reach-PSM-IK-Abs-v0", cfg=env_cfg)
+    
+    # print action info
+    print("Action space: ", env.unwrapped.action_space)
+    print("Action space shape: ", env.unwrapped.action_space.shape)
+    print("Num envs: ", env.unwrapped.num_envs)
     # reset environment at start
     env.reset()
 
     # create action buffers (position + quaternion)
     actions = torch.zeros(env.unwrapped.action_space.shape, device=env.unwrapped.device)
     actions[:, 3] = 1.0
+    
 
     # create state machine
     reach_sm = ReachSm(env_cfg.sim.dt * env_cfg.decimation, env.unwrapped.num_envs, env.unwrapped.device)
@@ -199,7 +205,7 @@ def main():
         # run everything in inference mode
         with torch.inference_mode():
             # step environment
-            dones = env.step(actions)[-2]
+            dones = env.step(actions)[-2] # send the desired EE pose (actions) as long as the app is open (the robot move forward the target)
             # observations
             robot: RigidObject = env.unwrapped.scene["robot"]
             # -- end-effector frame
