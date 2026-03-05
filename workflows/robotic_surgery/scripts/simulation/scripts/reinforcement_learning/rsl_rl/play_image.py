@@ -122,7 +122,7 @@ def main():
     # env.step = patched_step
     # ###################################################################
     
-    ########## NEW RSL_RL IMAGE BASED RL ##########
+    ########## TENSORDICT WRAPPER - SUPPORTS ALL RL TYPES ##########
     from tensordict import TensorDict
     def ensure_tensordict(data):
         obs = data[0] if isinstance(data, tuple) else data
@@ -132,13 +132,19 @@ def main():
             td = TensorDict(obs, batch_size=env.num_envs).to(agent_cfg.device)
         else:
             td = TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
+        
+        # Process image tensors: permute NHWC -> NCHW and normalize to [0, 1]
         for key in list(td.keys()):
             if len(td[key].shape) == 4 and td[key].shape[-1] in [3, 4]:
+                # This is an image tensor: (B, H, W, C) -> (B, C, H, W)
                 td[key] = td[key].permute(0, 3, 1, 2).float() / 255.0
+        
+        # Ensure dummy_state exists for compatibility
         if "dummy_state" not in td.keys():
             td["dummy_state"] = torch.zeros((env.num_envs, 0), device=agent_cfg.device)
             
         return td
+    
     original_get_obs = env.get_observations
     original_step = env.step
 
@@ -230,6 +236,14 @@ def main():
     ]
     prev_pos = None
     
+    # Low-pass filter for smooth action trajectories 
+    action_filter_alpha = 0.2
+    filtered_actions = None
+    
+    # ===== FILTER TOGGLE: Set to True to enable, False to disable =====
+    USE_ACTION_FILTER = False
+    # ====================================================================
+    
     # Variables to save penultimate step data
     last_ee_pos_b = None
     last_ee_quat_b = None
@@ -274,6 +288,25 @@ def main():
             # # agent stepping
             actions = policy(obs)
             # actions = torch.zeros_like(actions)
+            
+            # Apply filter or use raw actions based on USE_ACTION_FILTER flag
+            if USE_ACTION_FILTER:
+                # Low-pass filter for smooth trajectories
+                if filtered_actions is None:
+                    filtered_actions = actions.clone()
+                else:
+                    filtered_actions = action_filter_alpha * actions + (1.0 - action_filter_alpha) * filtered_actions
+                actions_to_use = filtered_actions
+                
+                # DEBUG: Show the difference
+                raw_val = actions[0, 2].cpu().item()  # Joint 2 (Insertion)
+                filtered_val = actions_to_use[0, 2].cpu().item()
+                print(f"[FILTER DEBUG] Joint 2 (Insertion): RAW={raw_val:+.4f} → FILTERED={filtered_val:+.4f} (alpha={action_filter_alpha})")
+            else:
+                # Raw actions without filtering
+                actions_to_use = actions
+                raw_val = actions[0, 2].cpu().item()
+                print(f"[NO FILTER] Joint 2 (Insertion): RAW={raw_val:+.4f} → USED AS-IS={raw_val:+.4f}")
 
             # # ######## ACTION LOGGING ########
             # # (full mapping: policy -> clipped -> affine -> clip -> target)
@@ -335,7 +368,7 @@ def main():
             # step env
             
             # env stepping
-            obs, rewards, dones, extras = env.step(actions) # NEW RSL_RL
+            obs, rewards, dones, extras = env.step(actions_to_use) # NEW RSL_RL - use filtered actions
             
             
             # ######## ACTION LOGGING ########

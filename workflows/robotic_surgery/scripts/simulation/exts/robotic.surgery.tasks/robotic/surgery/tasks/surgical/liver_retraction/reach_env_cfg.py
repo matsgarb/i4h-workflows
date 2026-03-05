@@ -106,24 +106,34 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
         
-        # # STATE BASED RL
-        # joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        # joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        # ===== OPTION 1: STATE BASED RL =====
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         # # object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
         # # target_pose = ObsTerm(func=mdp.liver_target_pose_world, params={"object_cfg": SceneEntityCfg("liver")})
-        # actions = ObsTerm(func=mdp.last_action)
+        actions = ObsTerm(func=mdp.last_action)
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+        
+        # # ===== OPTION 2: IMAGE BASED RL - SINGLE FRAME (OLD) =====
+        # camera_rgb = ObsTerm(func=mdp.camera_rgb_observation)
         # def __post_init__(self):
-        #     self.enable_corruption = True
+        #     self.enable_corruption = False
         #     self.concatenate_terms = True
         
-        # ===== IMAGE BASED RL - SINGLE FRAME (OLD) =====
-        camera_rgbd = ObsTerm(func=mdp.camera_rgb_observation)
-        
-        # # ===== IMAGE BASED RL - FRAME STACKING (NEW) =====
+        # # ===== OPTION 3: IMAGE BASED RL - FRAME STACKING (NEW) =====
         # camera_rgbd = ObsTerm(func=mdp.camera_rgb_frame_stack_observation)
         # def __post_init__(self):
         #     self.enable_corruption = False
         #     self.concatenate_terms = True
+        
+        # # ===== OPTION 4: HYBRID RL - IMAGE + ACTIONS (EXPERIMENTAL) =====
+        # camera_rgb = ObsTerm(func=mdp.camera_rgb_observation)
+        # actions = ObsTerm(func=mdp.last_action)
+        # def __post_init__(self):
+        #     self.enable_corruption = False
+        #     self.concatenate_terms = False  # image (3,168,168) + actions (6,) are incompatible shapes
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -159,9 +169,9 @@ class EventCfg:
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
-    # # reach_liver
-    reaching_object = RewTerm(func=mdp.object_ee_distance, weight=-0.8, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
-    ee_orientation = RewTerm(func=mdp.object_ee_orientation_error, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    # # # reach_liver
+    # reaching_object = RewTerm(func=mdp.object_ee_distance, weight=-0.8, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    # ee_orientation = RewTerm(func=mdp.object_ee_orientation_error, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
    
     # # # REACH + INSERT
     # # insert_lift = RewTerm(func=mdp.insert_lift_reward, weight=1.0, params={"object_cfg": SceneEntityCfg("liver")})
@@ -187,12 +197,12 @@ class RewardsCfg:
     # # success_reward = RewTerm(func=mdp.final_success_reward, weight=1.0, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
 
     # # lift_liver
-    # visual_exposure = RewTerm(func=mdp.visual_exposure_reward, weight=0.1)
+    visual_exposure = RewTerm(func=mdp.visual_exposure_reward, weight=0.1)
 
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.00)
+    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.00)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
-        weight=-0.00, # -0.02, -0.001
+        weight=-0.01, # -0.02, -0.001
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
@@ -215,6 +225,11 @@ class TerminationsCfg:
     
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     
+    success = DoneTerm(
+        func=mdp.gallbladder_visibility_success,
+        params={"pixel_threshold": 2500},
+    )
+    
     # # REACH + INSERT
     # success = DoneTerm(
     # 	func=mdp.achieved_insert_target,
@@ -227,28 +242,28 @@ class TerminationsCfg:
 	# )
     
     # # REACH ONLY reach_liver
-    success = DoneTerm(
-    	func=mdp.achieved_target,
-    	params = {
-    		"asset_cfg": SceneEntityCfg("robot", body_names = MISSING),
-    		"object_cfg": SceneEntityCfg("liver"),
-    		"pos_threshold": 0.003, # 0.0025,
-    		"or_threshold": 0.2, # 0.05,
-    		},
-	)
+    # success = DoneTerm(
+    # 	func=mdp.achieved_target,
+    # 	params = {
+    # 	"asset_cfg": SceneEntityCfg("robot", body_names = MISSING),
+    # 	"object_cfg": SceneEntityCfg("liver"),
+    # 	"pos_threshold": 0.003, # 0.0025,
+    # 		"or_threshold": 0.2, # 0.05,
+    # 	},
+	# )
 
 
-@configclass
-class CurriculumCfg:
+# @configclass
+# class CurriculumCfg:
 
-    # """Curriculum terms for the MDP."""
-    action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 448000} # -0.01, 128000, 36000
-    )
+#     # """Curriculum terms for the MDP."""
+#     action_rate = CurrTerm(
+#         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 448000} # -0.01, 128000, 36000, 448000
+#     )
     
-    joint_vel = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.5, "num_steps": 448000}
-    )
+#     joint_vel = CurrTerm(
+#         func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.5, "num_steps": 448000}
+#     )
     
     # action_rate_phase1 = CurrTerm(
     #     func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 384000}
@@ -276,7 +291,7 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    curriculum: CurriculumCfg = CurriculumCfg()
+    # curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         """Post initialization."""
