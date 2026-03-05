@@ -48,8 +48,10 @@ from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.utils.dict import print_dict
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
+
+
 from rsl_rl.runners import OnPolicyRunner
-from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world
+from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world, gallbladder_pixel_count, gallbladder_visibility_success, visual_exposure_reward
 from isaaclab.utils.math import quat_error_magnitude
 import socket
 import struct
@@ -223,6 +225,44 @@ def main():
 
             # STEP 3: Execute action and get next state (s_{t+1})
             obs, rewards, dones, extras = env.step(actions) 
+
+            # Get camera sensor and compute gallbladder visibility
+            try:
+                camera = env.unwrapped.scene.sensors["camera"]
+                if camera is not None:
+                    cam_out = camera.data.output
+                    rgb_tensor = cam_out.get("rgb", None)
+                    if rgb_tensor is not None:
+                        img_rgb = rgb_tensor[0, :, :, :3].cpu().numpy()
+                        visible_pixels = gallbladder_pixel_count(img_rgb)
+                        
+                        # Check success condition
+                        success_status = gallbladder_visibility_success(env.unwrapped, pixel_threshold=2500)
+                        # Handle tensor output - ensure we get a scalar
+                        if isinstance(success_status, torch.Tensor):
+                            success_bool = success_status[0].item() if success_status.shape[0] > 0 else False
+                        else:
+                            success_bool = bool(success_status[0]) if hasattr(success_status, '__getitem__') else bool(success_status)
+                        
+                        # Compute visual exposure reward
+                        vis_reward = visual_exposure_reward(env.unwrapped)
+                        # Handle tensor output
+                        if isinstance(vis_reward, torch.Tensor):
+                            vis_reward_value = vis_reward[0].item() if vis_reward.shape[0] > 0 else 0.0
+                        else:
+                            vis_reward_value = float(vis_reward[0]) if hasattr(vis_reward, '__getitem__') else float(vis_reward)
+                        
+                        success_text = "✓ SUCCESS" if success_bool else "✗ NO SUCCESS"
+                        print(f"[GALLBLADDER] Visible pixels: {visible_pixels} | Threshold: 2500 | {success_text} | visibility reward: {vis_reward_value:.4f}")
+                    else:
+                        if timestep == 0:
+                            print("[DEBUG] RGB tensor is None")
+                else:
+                    if timestep == 0:
+                        print("[DEBUG] Camera is None")
+            except Exception as e:
+                if timestep == 0:
+                    print(f"[DEBUG] Camera error: {e}")  # Print error only on first step
 
             # Extract obs_flat correctly (same logic as later in the code)
             if isinstance(obs_before, dict):

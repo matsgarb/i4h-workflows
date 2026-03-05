@@ -53,29 +53,41 @@ PSM_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        # reach_liver
-        joint_pos={
-            "psm_yaw_joint":  0.0, # -0.18915,#
-            "psm_pitch_end_joint": 0.0, # -0.48114, #
-            "psm_main_insertion_joint":  0.0565, # 0.08451, #
-            "psm_tool_roll_joint": 0.0, # -0.48192, #
-            "psm_tool_pitch_joint": 0.0, # 0.19863, #
-            "psm_tool_yaw_joint":  0.0, # 0.37562, #
-            "psm_tool_gripper1_joint": -0.09, 
-            "psm_tool_gripper2_joint": 0.09, 
-        },
-
-        # # lifting liver 
+        # # reach_liver OLD POS
         # joint_pos={
-        #     "psm_yaw_joint":  -0.056,
-        #     "psm_pitch_end_joint": -0.36, 
-        #     "psm_main_insertion_joint":  0.095,
-        #     "psm_tool_roll_joint": -1.4,
-        #     "psm_tool_pitch_joint": -0.0256,
-        #     "psm_tool_yaw_joint": 1.3992,
+        #     "psm_yaw_joint":  0.0, # -0.18915,#
+        #     "psm_pitch_end_joint": 0.0, # -0.48114, #
+        #     "psm_main_insertion_joint":  0.0565, # 0.08451, #
+        #     "psm_tool_roll_joint": 0.0, # -0.48192, #
+        #     "psm_tool_pitch_joint": 0.0, # 0.19863, #
+        #     "psm_tool_yaw_joint":  0.0, # 0.37562, #
         #     "psm_tool_gripper1_joint": -0.09, 
         #     "psm_tool_gripper2_joint": 0.09, 
         # },
+
+        # # reach_liver NEW POS
+        # joint_pos={
+        #     "psm_yaw_joint":  0.0, 
+        #     "psm_pitch_end_joint": -0.2, 
+        #     "psm_main_insertion_joint":  0.105,
+        #     "psm_tool_roll_joint": -0.3,
+        #     "psm_tool_pitch_joint":  0.0, 
+        #     "psm_tool_yaw_joint":  0.0,
+        #     "psm_tool_gripper1_joint": -0.09, 
+        #     "psm_tool_gripper2_joint": 0.09, 
+        # },
+
+        # lifting liver 
+        joint_pos={
+            "psm_yaw_joint":  -0.01,
+            "psm_pitch_end_joint": -0.3, 
+            "psm_main_insertion_joint":  0.145, # 0.095,
+            "psm_tool_roll_joint": -1.4,
+            "psm_tool_pitch_joint": -0.0256,
+            "psm_tool_yaw_joint": 0.2216,
+            "psm_tool_gripper1_joint": -0.09, 
+            "psm_tool_gripper2_joint": 0.09, 
+        },
 
        
         # joint_pos={
@@ -102,7 +114,8 @@ PSM_CFG = ArticulationCfg(
         #     "psm_tool_gripper2_joint": 0.09,
         # },
         # pos=(0.02, 0.02, 0.08), # original pos: 0.0, 0.0, 0.15 ------- 0.02, 0.02, 0.08
-        pos=(-0.03, 0.0, 0.1), 
+        # pos=(-0.03, 0.0, 0.1), # OLD POS
+        pos=(-0.025, 0.015, 0.15), # NEW POS
         # pos=(0.0, 0.0, 0.1),
         # rot=(q_total), # original orient: (1.0, 0.0, 0.0, 0.0) ------- q_total 
         rot=(0.2334, 0.0, 0.0, 0.9723),  # 153° rotation around Z (63° + 90°) 

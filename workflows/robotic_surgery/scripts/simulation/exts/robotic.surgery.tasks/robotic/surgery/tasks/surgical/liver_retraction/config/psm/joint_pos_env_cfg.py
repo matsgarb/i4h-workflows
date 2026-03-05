@@ -171,7 +171,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
             init_state=DeformableObjectCfg.InitialStateCfg(pos=(-0.09, -0.07, -0.06), rot=(1, 0, 0, 0)), # pos=(-0.1, -0.1, 0.0), final_organs_1:(-0.07, -0.07, -0.0), final_organs_1:(-0.053, -0.051, -0.0)
             # init_state=DeformableObjectCfg.InitialStateCfg(pos=(-0.1, -0.08, -0.06), rot=(1, 0, 0, 0)),
             spawn=UsdFileCfg(
-                usd_path="/home/dvrkteam/Downloads/final_organs_7.usd", # final_organs_4 # final_organs_6, final_organs_7
+                usd_path="/home/dvrkteam/Downloads/final_organs_8.usd", # final_organs_4 # final_organs_6, final_organs_7
                 # # BEFORE CHECKING PHYSICAL PARAMETERS OF THE MESH MADE OF SYLICON
                 # # scale=(0.12, 0.12, 0.12), 
                 # scale=(0.1, 0.1, 0.1), # final_organs_5.usd
@@ -215,11 +215,11 @@ class PSMReachEnvCfg(ReachEnvCfg):
 
         # override rewards and terminations
         # self.rewards.insert_drive.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
-        self.rewards.reaching_object.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
-        self.rewards.ee_orientation.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
+        # self.rewards.reaching_object.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
+        # self.rewards.ee_orientation.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.ee_below_target_penalty.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.success_bonus.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
-        self.terminations.success.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
+        # self.terminations.success.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.success_reward.params["asset_cfg"].body_names = ["psm_tool_tip_link"] # REACH + INSERT
         # self.rewards.reach_phase_reward.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         
@@ -267,7 +267,8 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # =============================================================
         
         # "reset" or "interval" (/home/dvrkteam/i4h-workflows/third_party/IsaacLab/source/isaaclab/isaaclab/managers/event_manager.py)
-        # reset position of the liver at every reset
+        
+        # ############### RESET ROBOT JOINT POSITION
 
         
         # # reach_liver
@@ -281,7 +282,6 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # )
         
         
-        # # CAMBIATO 
         # self.events.reset_robot_joints = EventTerm(
         #     func=mdp.reset_joints_by_scale,
         #     mode="reset",
@@ -292,27 +292,6 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # )
         
         
-        
-        
-        # self.events.reset_liver_position = EventTerm(
-        #     func=mdp.reset_nodal_state_uniform,
-        #     mode="reset",
-        #     params={
-        #         "position_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
-        #         "velocity_range": {},
-        #         "asset_cfg": SceneEntityCfg("liver"),
-        #     },
-        # )
-        
-        # self.events.reset_gallbladder_position = EventTerm(
-        #     func=mdp.reset_nodal_state_uniform,
-        #     mode="reset",
-        #     params={
-        #         "position_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
-        #         "velocity_range": {},
-        #         "asset_cfg": SceneEntityCfg("gallbladder"),
-        #     },
-        # )
         
 
         # lift_liver
@@ -332,13 +311,14 @@ class PSMReachEnvCfg(ReachEnvCfg):
             mode="reset",
             params={
                 # per-joint ranges: [yaw, pitch, insertion, roll, pitch, yaw, gripper 1, gripper 2]
+                # (-0.2, 0.2) for reach STATE based, (-0.1, 0.1) for reach IMAGE based,  (0, 0) for lift
                 "position_ranges": [
-                    (-0.1, 0.1),  # yaw
-                    (-0.1, 0.1),  # pitch
-                    (-0.0, 0.01),  # insertion
-                    (-0.1, 0.1),  # tool roll
-                    (-0.1, 0.1),  # tool pitch
-                    (-0.1, 0.1),  # tool yaw
+                    (0, 0),  # yaw
+                    (0, 0),  # pitch
+                    (0, 0),  # insertion
+                    (0, 0),  # tool roll
+                    (0, 0),  # tool pitch
+                    (0, 0),  # tool yaw
                     (0.00, 0.00),  # gripper 1
                     (0.00, 0.00),  # gripper 2
                 ],
@@ -355,24 +335,44 @@ class PSMReachEnvCfg(ReachEnvCfg):
             },
         )
 
-        
-        self.events.capture_liver_snapshot = EventTerm(
-            func=mdp.capture_liver_snapshot_once,
-            mode="interval",
-            interval_range_s=(0.0, 0.0),
-            params={
-                "asset_cfg": SceneEntityCfg("liver"),
-                "capture_step": 25,
-                "node_index": 433, # 26, # 491 # 3 # 433 final_organs_6
-            },
-        )
+        # # ################# RESET LIVER POSITION
         self.events.reset_liver_position = EventTerm(
-            func=mdp.reset_liver_to_snapshot,
+            func=mdp.reset_nodal_state_uniform,
             mode="reset",
             params={
+                "position_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+                "velocity_range": {},
                 "asset_cfg": SceneEntityCfg("liver"),
             },
         )
+        
+        # self.events.reset_gallbladder_position = EventTerm(
+        #     func=mdp.reset_nodal_state_uniform,
+        #     mode="reset",
+        #     params={
+        #         "position_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+        #         "velocity_range": {},
+        #         "asset_cfg": SceneEntityCfg("gallbladder"),
+        #     },
+        # )
+        
+        # self.events.capture_liver_snapshot = EventTerm(
+        #     func=mdp.capture_liver_snapshot_once,
+        #     mode="interval",
+        #     interval_range_s=(0.0, 0.0),
+        #     params={
+        #         "asset_cfg": SceneEntityCfg("liver"),
+        #         "capture_step": 25,
+        #         "node_index": 433, # 26, # 491 # 3 # 433 final_organs_6
+        #     },
+        # )
+        # self.events.reset_liver_position = EventTerm(
+        #     func=mdp.reset_liver_to_snapshot,
+        #     mode="reset",
+        #     params={
+        #         "asset_cfg": SceneEntityCfg("liver"),
+        #     },
+        # )
        
         
         # # Randomize liver position and rotation at each reset
@@ -398,27 +398,27 @@ class PSMReachEnvCfg(ReachEnvCfg):
         #     params={"asset_cfg": SceneEntityCfg("robot", body_names="psm_tool_tip_link"),"object_cfg": SceneEntityCfg("liver"),"pos_threshold": 0.002,"or_threshold": 0.25},
         # )
 
-        # # # ========== ATTACH LIVER NODE TO EE POSITION ==========
-        # # lift_liver - attach node at reset
-        # self.events.attach_liver_node = EventTerm(
-        #     func=mdp.attach_liver_node_to_tcp,
-        #     mode="reset",
-        #     params={
-        #         "node_index": 433, # 433 final_organs_7 # 3, # 26, # 491, 323 final_organs_1
-        #         "asset_cfg": SceneEntityCfg("liver"),
-        #         "tcp_cfg": SceneEntityCfg("ee_frame"),
-        #     },
-        # )
-        # self.events.drive_liver_node = EventTerm( # keep node attached to EE at every step
-        #     func=mdp.drive_liver_node_to_tcp,
-        #     mode="interval",
-        #     interval_range_s=(0.001, 0.001),
-        #     params={
-        #         "node_index": 433, # 3 #26, # 491, 323 final_organs_1
-        #         "asset_cfg": SceneEntityCfg("liver"),
-        #         "tcp_cfg": SceneEntityCfg("ee_frame"),
-        #     },
-        # )
+        # ========== ATTACH LIVER NODE TO EE POSITION ==========
+        # lift_liver - attach node at reset
+        self.events.attach_liver_node = EventTerm(
+            func=mdp.attach_liver_node_to_tcp,
+            mode="reset",
+            params={
+                "node_index": 433, # 433 final_organs_7 # 3, # 26, # 491, 323 final_organs_1
+                "asset_cfg": SceneEntityCfg("liver"),
+                "tcp_cfg": SceneEntityCfg("ee_frame"),
+            },
+        )
+        self.events.drive_liver_node = EventTerm( # keep node attached to EE at every step
+            func=mdp.drive_liver_node_to_tcp,
+            mode="interval",
+            interval_range_s=(0.001, 0.001),
+            params={
+                "node_index": 433, # 3 #26, # 491, 323 final_organs_1
+                "asset_cfg": SceneEntityCfg("liver"),
+                "tcp_cfg": SceneEntityCfg("ee_frame"),
+            },
+        )
         
 
          
