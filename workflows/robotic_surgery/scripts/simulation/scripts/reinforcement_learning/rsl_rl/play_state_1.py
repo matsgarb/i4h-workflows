@@ -27,7 +27,8 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-args_cli = parser.parse_args()
+# args_cli = parser.parse_args()
+args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -43,7 +44,9 @@ import numpy as np
 import gymnasium as gym
 import robotic.surgery.tasks  # noqa: F401
 import torch
+import cv2  # For saving mask images
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.utils.dict import print_dict
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
@@ -51,12 +54,17 @@ from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
 
 from rsl_rl.runners import OnPolicyRunner
-from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world, gallbladder_pixel_count, gallbladder_visibility_success, visual_exposure_reward
+from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world, gallbladder_pixel_count, gallbladder_visibility_success, visual_exposure_reward, vertical_lifting_reward
+from isaaclab.managers.reward_manager import RewardTermCfg
+from isaaclab.envs.mdp.rewards import joint_vel_l2
 from isaaclab.utils.math import quat_error_magnitude
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers.config import FRAME_MARKER_CFG, POSITION_GOAL_MARKER_CFG
 import socket
 import struct
 import time
 import pandas as pd
+import json
 
 
 
@@ -74,6 +82,82 @@ def main():
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
+
+    # ===== LOAD OBSERVATIONS FROM EXCEL FOR OVERRIDE =====
+    # Load observation data to override joint_pos_rel for ground truth comparison
+    # DISABLED BY DEFAULT - Set OVERRIDE_OBSERVATIONS_FROM_EXCEL = True to enable
+    OVERRIDE_OBSERVATIONS_FROM_EXCEL = False  # <-- Set to True to load from Excel file
+    
+    excel_obs_file = os.path.join(log_dir, "episode_599_observations.xlsx")
+    override_obs_data = None
+    override_column_indices = None
+    
+    if OVERRIDE_OBSERVATIONS_FROM_EXCEL:
+        print(f"\n[DEBUG] Looking for Excel file at: {excel_obs_file}")
+        print(f"[DEBUG] File exists: {os.path.exists(excel_obs_file)}")
+        
+        if os.path.exists(excel_obs_file):
+            try:
+                df_obs = pd.read_excel(excel_obs_file)
+                print(f"[INFO] ✓ Loaded observation Excel file")
+                print(f"[INFO] Shape: {df_obs.shape[0]} rows × {df_obs.shape[1]} cols")
+                print(f"[INFO] Columns: {df_obs.columns.tolist()}")
+                
+                # Find joint position columns - try multiple naming patterns
+                noisy_pos_cols = [col for col in df_obs.columns if col.startswith('noisy_pos_')]
+                true_pos_cols = [col for col in df_obs.columns if col.startswith('true_pos_')]
+                obs_joint_pos_cols = [col for col in df_obs.columns if col.startswith('obs_joint_pos_')]
+                joint_pos_cols = [col for col in df_obs.columns if 'joint_pos' in col.lower() and col != 'timestep']
+                
+                print(f"[DEBUG] Found {len(noisy_pos_cols)} 'noisy_pos_*' columns")
+                print(f"[DEBUG] Found {len(true_pos_cols)} 'true_pos_*' columns")
+                print(f"[DEBUG] Found {len(obs_joint_pos_cols)} 'obs_joint_pos_*' columns")
+                print(f"[DEBUG] Found {len(joint_pos_cols)} 'joint_pos_*' columns (excluding 'timestep')")
+                
+                # Choose which columns to use (prefer noisy_pos, then true_pos, then obs_joint_pos, then generic joint_pos)
+                if len(noisy_pos_cols) >= 6:
+                    selected_cols = noisy_pos_cols[:6]
+                    print(f"[INFO] ✓ Using 'noisy_pos_*' columns for override")
+                elif len(true_pos_cols) >= 6:
+                    selected_cols = true_pos_cols[:6]
+                    print(f"[INFO] ✓ Using 'true_pos_*' columns for override")
+                elif len(obs_joint_pos_cols) >= 6:
+                    selected_cols = obs_joint_pos_cols[:6]
+                    print(f"[INFO] ✓ Using 'obs_joint_pos_*' columns for override")
+                elif len(joint_pos_cols) >= 6:
+                    selected_cols = joint_pos_cols[:6]
+                    print(f"[INFO] ✓ Using 'joint_pos_*' columns: {selected_cols}")
+                else:
+                    # Try just taking first 6 numeric columns, excluding 'timestep' and 'step'
+                    numeric_cols = [col for col in df_obs.columns if col not in ['timestep', 'step', 'Step']][:6]
+                    if len(numeric_cols) >= 6:
+                        selected_cols = numeric_cols
+                        print(f"[INFO] ⚠ Using first 6 columns (excluding timestep/step): {selected_cols}")
+                    else:
+                        selected_cols = None
+                        print(f"[WARNING] Could not find 6 joint position columns!")
+                
+                if selected_cols is not None:
+                    override_obs_data = df_obs
+                    override_column_indices = selected_cols
+                    print(f"[INFO] Will override joint_pos with columns: {override_column_indices}")
+                
+            except Exception as e:
+                print(f"[ERROR] Could not load observation Excel file: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[WARNING] Observation file NOT FOUND: {excel_obs_file}")
+            print(f"[DEBUG] Listing files in log_dir:")
+            try:
+                for fname in os.listdir(log_dir)[:10]:
+                    print(f"  - {fname}")
+            except Exception as e:
+                print(f"  (could not list: {e})")
+    else:
+        print(f"[INFO] Observation override DISABLED - using simulation observations only")
+        print(f"[INFO] To enable override, set OVERRIDE_OBSERVATIONS_FROM_EXCEL = True")
+    # =====================================================
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -101,11 +185,11 @@ def main():
     ########## NEW RSL_RL STATE BASED RL ##########
     from tensordict import TensorDict
     def ensure_tensordict(data):
-        # Estrae i dati se è una tupla (obs, extras)
+        # Extract data if it's a tuple (obs, extras)
         obs = data[0] if isinstance(data, tuple) else data
         if isinstance(obs, TensorDict): return obs
         if isinstance(obs, dict): return TensorDict(obs, batch_size=env.num_envs)
-        # Impacchetta il tensore sotto la chiave "policy"
+        # Pack the tensor under the "policy" key
         return TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
 
     original_get_obs = env.get_observations
@@ -146,7 +230,23 @@ def main():
     base_env = getattr(env, "unwrapped", env)
     robot_asset = base_env.scene["robot"]
     ee_frame = base_env.scene["ee_frame"]
- 
+
+    # ===== REF FRAME VISUALIZATION TOGGLE =====
+    # Set to True/False, or comment/decomment this section as you prefer.
+    SHOW_REF_FRAMES = False
+    camera_frame_marker = None
+    robot_root_frame_marker = None
+    target_frame_marker = None
+    target_point_marker = None
+    ee_marker = None
+    # ===== END VISUALIZATION (COMMENT/DECOMMENT) =====
+    
+    # Save camera reference for later mask saving
+    try:
+        camera_sensor = base_env.scene.sensors["camera"]
+    except Exception as e:
+        print(f"[WARNING] Could not get camera sensor: {e}")
+        camera_sensor = None
     # # PRINT ACTUATOR CONFIG FOR DEBUGGING
     # drive_props = getattr(robot_asset, "drive_properties", None)
     # act_cfg = getattr(robot_asset, "cfg", None)
@@ -159,7 +259,8 @@ def main():
     # ROBOT_IP = "127.0.0.1" # localhost
     # ROBOT_IP = "10.168.129.217"
     # ROBOT_IP = "10.41.197.104"
-    ROBOT_IP = "10.41.50.246" # new arm computer
+    # ROBOT_IP = "10.41.50.246" # new arm computer
+    ROBOT_IP = "10.41.53.28"
     ROBOT_PORT = 5005
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
    
@@ -203,6 +304,40 @@ def main():
     print(f"\nEE frame (robot RF): X={e_pos_b[0]:.5f}, Y={e_pos_b[1]:.5f}, Z={e_pos_b[2]:.5f}, w={e_quat_b[0]:.5f}, x={e_quat_b[1]:.5f}, y={e_quat_b[2]:.5f}, z={e_quat_b[3]:.5f}")
     print("="*80 + "\\n")
     
+    # ========== LIVER STABILIZATION WARM-UP ==========
+    # Number of steps to run with zero actions before the policy starts
+    STABILIZATION_STEPS = 20  # Adjust as needed (10-30 steps is usually enough)
+    # =========================================
+
+    # ========== LIVER STABILIZATION WARM-UP ==========
+    print(f"\n[INFO] Running {STABILIZATION_STEPS} stabilization steps (zero actions) to let liver settle...")
+    # Get correct action dimension from the environment
+    action_dim = base_env.action_manager.total_action_dim
+    zero_actions = torch.zeros(env.num_envs, action_dim, device=agent_cfg.device)
+    with torch.inference_mode():
+        for stab_step in range(STABILIZATION_STEPS):
+            obs, _, _, _ = env.step(zero_actions)
+            if stab_step % 5 == 0:
+                print(f"  [STABILIZE] step {stab_step+1}/{STABILIZATION_STEPS}")
+    print("[INFO] Stabilization complete. Starting policy inference.\n")
+    # ==================================================
+    
+    # ========== ACTION FILTERING SETUP ==========
+    USE_ACTION_FILTER = True
+    action_filter_alpha = 0.1
+    filtered_actions = None
+    # ==========================================
+    
+    # ========== DATA SAVING SETUP ==========
+    SAVE_DATA = False
+    SAVE_MASK = True  # Save binary mask and final frame when episode ends
+    timestep_data_list = []  # Collect data for each timestep
+    if SAVE_DATA:
+        print(f"[INFO] Data saving enabled. Data will be saved as Excel file at episode end.")
+    if SAVE_MASK:
+        print(f"[INFO] Mask saving enabled. Binary mask and final frame will be saved at episode end.")
+    # ========================================
+    
     while simulation_app.is_running():
         # run everything in inference mode
         with torch.inference_mode():
@@ -216,6 +351,40 @@ def main():
             true_pos = robot_asset.data.joint_pos[0].cpu().numpy() # obs file
             true_vel = robot_asset.data.joint_vel[0].cpu().numpy() # obs file
             
+            # ===== OVERRIDE OBSERVATIONS BEFORE POLICY INFERENCE (if enabled) =====
+            if OVERRIDE_OBSERVATIONS_FROM_EXCEL and override_obs_data is not None and override_column_indices is not None:
+                if timestep < len(override_obs_data):
+                    try:
+                        # Extract observations from TensorDict
+                        if isinstance(obs_before, dict):
+                            obs_data = obs_before.get("policy", obs_before)
+                        elif hasattr(obs_before, 'get'):
+                            obs_data = obs_before.get("policy", obs_before)
+                        else:
+                            obs_data = obs_before
+                        
+                        # Convert to numpy for modification
+                        if torch.is_tensor(obs_data):
+                            obs_np = obs_data[0].cpu().numpy().copy() if obs_data.dim() > 1 else obs_data.cpu().numpy().copy()
+                        else:
+                            obs_np = np.array(obs_data)
+                        
+                        # Override first 6 joint positions with values from Excel
+                        row = override_obs_data.iloc[timestep]
+                        joint_pos_override = np.array([row[col] for col in override_column_indices])
+                        obs_np[:6] = joint_pos_override
+                        
+                        # Reconstruct obs_before as TensorDict with modified observations
+                        obs_tensor = torch.from_numpy(obs_np).float().to(device=agent_cfg.device).unsqueeze(0)
+                        from tensordict import TensorDict
+                        obs_before = TensorDict({"policy": obs_tensor}, batch_size=env.num_envs)
+                        
+                        if timestep == 0:
+                            print(f"[OVERRIDE] Step {timestep}: Observations overridden with Excel data BEFORE policy inference")
+                    except Exception as e:
+                        print(f"[WARNING] Override failed at step {timestep}: {e}")
+            # ======================================================================
+            
             # STEP 2: Get action from policy based on current observation
             actions = policy(obs_before)
             raw_policy = actions[0].cpu().numpy()
@@ -223,8 +392,25 @@ def main():
             # # Keep robot still - override actions with zeros
             # actions = torch.zeros_like(actions)
 
+            # Apply filter or use raw actions based on USE_ACTION_FILTER flag
+            # ---------> filtered action = alpha * raw_action + (1 - alpha) * previous_filtered_action
+            if USE_ACTION_FILTER:
+                if filtered_actions is None:
+                    filtered_actions = actions.clone()
+                else:
+                    filtered_actions = action_filter_alpha * actions + (1.0 - action_filter_alpha) * filtered_actions
+                actions_to_use = filtered_actions
+                raw_val = actions[0, 2].cpu().item()  # Joint 2 (Insertion)
+                filtered_val = actions_to_use[0, 2].cpu().item()
+                print(f"[FILTER DEBUG] Joint 2 (Insertion): RAW={raw_val:+.4f} → FILTERED={filtered_val:+.4f} (alpha={action_filter_alpha})")
+            else:
+                actions_to_use = actions
+                raw_val = actions[0, 2].cpu().item()
+                print(f"[NO FILTER] Joint 2 (Insertion): RAW={raw_val:+.4f} → USED AS-IS={raw_val:+.4f}")
+            ############################
+
             # STEP 3: Execute action and get next state (s_{t+1})
-            obs, rewards, dones, extras = env.step(actions) 
+            obs, rewards, dones, extras = env.step(actions_to_use) 
 
             # Get camera sensor and compute gallbladder visibility
             try:
@@ -237,7 +423,7 @@ def main():
                         visible_pixels = gallbladder_pixel_count(img_rgb)
                         
                         # Check success condition
-                        success_status = gallbladder_visibility_success(env.unwrapped, pixel_threshold=2500)
+                        success_status = gallbladder_visibility_success(env.unwrapped, pixel_threshold=2700)
                         # Handle tensor output - ensure we get a scalar
                         if isinstance(success_status, torch.Tensor):
                             success_bool = success_status[0].item() if success_status.shape[0] > 0 else False
@@ -253,7 +439,19 @@ def main():
                             vis_reward_value = float(vis_reward[0]) if hasattr(vis_reward, '__getitem__') else float(vis_reward)
                         
                         success_text = "✓ SUCCESS" if success_bool else "✗ NO SUCCESS"
-                        print(f"[GALLBLADDER] Visible pixels: {visible_pixels} | Threshold: 2500 | {success_text} | visibility reward: {vis_reward_value:.4f}")
+                        print(f"[GALLBLADDER] Visible pixels: {visible_pixels} | Threshold: 2700 | {success_text} | visibility reward: {vis_reward_value:.4f}")
+                        try:
+                            lift_reward_tensor = vertical_lifting_reward(env.unwrapped, lateral_penalty_coef=1.0)
+                            lift_reward_value = lift_reward_tensor[0].item()
+                            ee_pos_now = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu()
+                            reset_pos  = env.unwrapped._ee_reset_pos[0].cpu()
+                            dx = (ee_pos_now[0] - reset_pos[0]).item()
+                            dy = (ee_pos_now[1] - reset_pos[1]).item()
+                            dz = (ee_pos_now[2] - reset_pos[2]).item()
+
+                            print(f"[LIFTING]     Δx={dx:+.5f}  Δy={dy:+.5f}  Δz={dz:+.5f} | lifting reward: {lift_reward_value:+.4f}")
+                        except Exception as e_lift:
+                            print(f"[LIFTING]     (not available: {e_lift})")
                     else:
                         if timestep == 0:
                             print("[DEBUG] RGB tensor is None")
@@ -324,8 +522,14 @@ def main():
                 # Send UDP only if not done
                 # data = struct.pack('6f', *real_move)
                 target_jp = processed_actions[:6] 
-                data = struct.pack('6f', *target_jp)
+                actions_raw_np = actions[0, :6].cpu().numpy()
+                data = struct.pack('6f', *actions_raw_np)
                 sock.sendto(data, (ROBOT_IP, ROBOT_PORT))
+                sock.settimeout(0.5)  # Set timeout for receiving response
+                # try:
+                #     ack, _ = sock.recvfrom(1024)  # Wait for acknowledgment from robot
+                # except socket.timeout:
+                #     print(f"[WARNING] No acknowledgment received from robot at {ROBOT_IP}:{ROBOT_PORT} within timeout.")
                 
                 # Track Insertion joint (index 2) for MAE calculation
                 insertion_real_moves.append(real_move[2])
@@ -365,10 +569,79 @@ def main():
             e_quat_w = ee_quat_w[0].cpu().numpy()
             e_pos_b = ee_pos_b[0].cpu().numpy()
             e_quat_b = ee_quat_b[0].cpu().numpy()
-            # print("ROBOT frame (world):   X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
-            #     r_pos_w[0], r_pos_w[1], r_pos_w[2], r_quat_w[0], r_quat_w[1], r_quat_w[2], r_quat_w[3]))
-            # print("EE frame (world):      X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
-            #     e_pos_w[0], e_pos_w[1], e_pos_w[2], e_quat_w[0], e_quat_w[1], e_quat_w[2], e_quat_w[3]))
+
+            # ===== OPTIONAL REF FRAME VISUALIZATION (COMMENT/DECOMMENT) =====
+            # Shows: camera frame, robot root frame, target frame + target point.
+            # Toggle with SHOW_REF_FRAMES above.
+            if SHOW_REF_FRAMES:
+                try:
+                    num_envs = robot_root_pos.shape[0]
+                    marker_indices = torch.zeros(num_envs, dtype=torch.int32, device=base_env.device)
+
+                    if robot_root_frame_marker is None:
+                        robot_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/RobotRootFrame_Play")
+                        robot_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                        robot_root_frame_marker = VisualizationMarkers(robot_cfg)
+
+                    if target_frame_marker is None:
+                        target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TargetFrame_Play")
+                        target_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                        target_frame_marker = VisualizationMarkers(target_cfg)
+
+                    if camera_frame_marker is None:
+                        cam_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CameraFrame_Play")
+                        cam_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                        camera_frame_marker = VisualizationMarkers(cam_cfg)
+
+                    if target_point_marker is None:
+                        point_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/TargetPoint_Play")
+                        target_point_marker = VisualizationMarkers(point_cfg)
+
+                    if "ee_marker" not in locals():
+                        ee_marker = None
+                    if ee_marker is None:
+                        ee_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame_Play")
+                        ee_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                        ee_marker = VisualizationMarkers(ee_marker_cfg)
+
+                    # Robot root frame
+                    robot_root_frame_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
+
+                    # Target frame + point (world frame)
+                    target_frame_marker.visualize(target_pos_w, target_quat_w, marker_indices=marker_indices)
+                    quat_id = torch.zeros((num_envs, 4), device=base_env.device, dtype=target_pos_w.dtype)
+                    quat_id[:, 0] = 1.0
+                    target_point_marker.visualize(target_pos_w, quat_id, marker_indices=marker_indices)
+
+                    # Camera frame (world frame)
+                    camera_sensor = None
+                    try:
+                        camera_sensor = base_env.scene.sensors["camera"]
+                    except Exception:
+                        try:
+                            camera_sensor = base_env.scene["camera"]
+                        except Exception:
+                            camera_sensor = None
+
+                    if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "pos_w"):
+                        cam_pos_w = camera_sensor.data.pos_w
+                        if hasattr(camera_sensor.data, "quat_w"):
+                            cam_quat_w = camera_sensor.data.quat_w
+                        else:
+                            cam_quat_w = torch.zeros((num_envs, 4), device=base_env.device, dtype=cam_pos_w.dtype)
+                            cam_quat_w[:, 0] = 1.0
+                        camera_frame_marker.visualize(cam_pos_w, cam_quat_w, marker_indices=marker_indices)
+
+                    # EE frame (world frame)
+                    ee_marker.visualize(ee_pos_w, ee_quat_w, marker_indices=marker_indices)
+                except Exception as e:
+                    print(f"[DEBUG] ref-frame visualization error: {e}")
+            # ===== END VISUALIZATION (COMMENT/DECOMMENT) =====
+            
+            print("ROBOT frame (world):   X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
+                r_pos_w[0], r_pos_w[1], r_pos_w[2], r_quat_w[0], r_quat_w[1], r_quat_w[2], r_quat_w[3]))
+            print("EE frame (world):      X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
+                e_pos_w[0], e_pos_w[1], e_pos_w[2], e_quat_w[0], e_quat_w[1], e_quat_w[2], e_quat_w[3]))
             print("EE frame (robot RF):   X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
                 e_pos_b[0], e_pos_b[1], e_pos_b[2], e_quat_b[0], e_quat_b[1], e_quat_b[2], e_quat_b[3]))
             # print("TARGET pose (world):    X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
@@ -384,7 +657,22 @@ def main():
             
             dist_error = torch.norm(ee_pos_b_tensor - t_pos_b_tensor, dim=1)[0].cpu().item()
             orient_error = quat_error_magnitude(ee_quat_b_tensor, t_quat_b_tensor)[0].cpu().item()
-            print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad")
+            
+            # Compute joint velocity penalty (L2 squared norm)
+            try:
+                joint_vel_penalty = joint_vel_l2(base_env, asset_cfg=SceneEntityCfg("robot"))[0].cpu().item()
+                print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad | JOINT VEL L2: {joint_vel_penalty:.6f}")
+            except Exception as e:
+                print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad | [joint vel error: {e}]")
+            
+            # Check if stopping conditions are met
+            if dist_error < 0.003 and orient_error < 0.3:
+                print("\n" + "=" * 80)
+                print("TARGET REACHED!")
+                print("=" * 80)
+                print(f"DISTANCE ERROR: {dist_error:.6f} m (threshold: < 0.003)")
+                print(f"ORIENTATION ERROR: {orient_error:.6f} rad (threshold: < 0.3)")
+                print("=" * 80 + "\n")
             
             # STEP 4: Get position after action execution (pos_{t+1})
             pos_after = robot_asset.data.joint_pos[0][:6].cpu().numpy()
@@ -399,6 +687,24 @@ def main():
             joint_pos_obs = obs_flat[:8] if obs_size >= 8 else obs_flat[:obs_size]
             joint_vel_obs = obs_flat[8:16] if obs_size >= 16 else obs_flat[8:obs_size]
             
+            # ===== OVERRIDE JOINT_POS_OBS FROM EXCEL IF AVAILABLE =====
+            if override_obs_data is not None and override_column_indices is not None:
+                if timestep < len(override_obs_data):
+                    try:
+                        row = override_obs_data.iloc[timestep]
+                        # Extract the 6 joint positions using the identified columns
+                        joint_pos_obs_override = np.array([row[col] for col in override_column_indices])
+                        # Keep gripper values (if they exist) from original obs
+                        joint_pos_obs_new = np.concatenate([joint_pos_obs_override, joint_pos_obs[6:]])
+                        joint_pos_obs = joint_pos_obs_new
+                        print(f"[OVERRIDE] Step {timestep}: joint_pos overridden from Excel")
+                    except Exception as e:
+                        print(f"[WARNING] Override failed at step {timestep}: {e}")
+                else:
+                    if timestep == 0:
+                        print(f"[DEBUG] File has {len(override_obs_data)} rows, cannot override step {timestep}")
+            # ============================================================
+            
             # target_pose: last 13 = target_pose(7) + actions(6)
             target_pose_start = obs_size - 13 if obs_size >= 13 else -1
             if target_pose_start >= 0:
@@ -408,13 +714,13 @@ def main():
                 target_pose_obs = []
                 actions_obs = []
             
-            # # PRINT OBSERVATIONS
-            # print(f"OBSERVATIONS (size={obs_size}, struct: pos[0:8] vel[8:16] target[{target_pose_start}:{target_pose_start+7}] actions[{target_pose_start+7}:{obs_size}]):")
-            # print(f"  joint_pos (rel, 8):   {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
-            # print(f"  joint_vel (rel, 8):   {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
-            # if len(target_pose_obs) == 7:
-            #     print(f"  target_pose (world, 7): pos=[{target_pose_obs[0]:.5f}, {target_pose_obs[1]:.5f}, {target_pose_obs[2]:.5f}], quat=[{target_pose_obs[3]:.5f}, {target_pose_obs[4]:.5f}, {target_pose_obs[5]:.5f}, {target_pose_obs[6]:.5f}]")
-            # print(f"  actions (last, 6):    {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
+            # ===== PRINT OBSERVATIONS =====
+            # Observation structure: joint_pos(8) + joint_vel(8) + actions(6) = 22
+            print(f"\nOBSERVATIONS (size={obs_size}):")
+            print(f"  joint_pos_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
+            print(f"  joint_vel_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
+            print(f"  last_action (6):      {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
+            # ===============================
             
 
             # # Collect data for Excel export (only arm joints 0-5, not gripper)
@@ -457,6 +763,35 @@ def main():
                       f"{real_move[i]:>10.5f}")
             print("=" * len(header))
             print("="*80 + "\n")
+            
+            # ===== DATA SAVING =====
+            if SAVE_DATA:
+                # Create a row for this timestep
+                row_data = {'timestep': timestep}
+                
+                # Add position (6 joints)
+                for j in range(6):
+                    row_data[f'position_j{j}'] = pos_after[j]
+                
+                # Add raw policy (6 values)
+                for j in range(6):
+                    row_data[f'raw_policy_j{j}'] = raw_policy[j]
+                
+                # Add processed actions (6 values)
+                for j in range(6):
+                    row_data[f'processed_actions_j{j}'] = processed_actions[j]
+                
+                # Add real movement (6 values)
+                for j in range(6):
+                    row_data[f'real_movement_j{j}'] = real_move[j]
+                
+                # Add distance and orientation errors
+                row_data['distance_error'] = dist_error
+                row_data['orientation_error'] = orient_error
+                
+                # Append to list
+                timestep_data_list.append(row_data)
+            # ======================
 
         done_flag = False
         if torch.is_tensor(dones):
@@ -492,10 +827,75 @@ def main():
             pos_str = " ".join([f"{p:.5f}".replace(".", ",") for p in initial_pos])
             print(f"Initial position of the joints: {pos_str}")
             
+            # ===== SAVE BINARY MASK AND FINAL FRAME AT EPISODE END =====
+            if SAVE_MASK:
+                try:
+                    from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import gallbladder_mask_tensor
+                    
+                    if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "output"):
+                        # Get RGB data from camera (fresh data at final step)
+                        camera_output = camera_sensor.data.output
+                        
+                        if "rgb" in camera_output:
+                            camera_rgb_raw = camera_output["rgb"][0, ..., :3]  # [H, W, 3]
+                            
+                            # Convert to numpy
+                            if torch.is_tensor(camera_rgb_raw):
+                                camera_rgb = camera_rgb_raw.cpu().numpy()
+                            else:
+                                camera_rgb = np.array(camera_rgb_raw)
+                            
+                            # Normalize to [0, 1] if needed
+                            if camera_rgb.max() > 1.0:
+                                camera_rgb = camera_rgb / 255.0
+                            
+                            # Create output directory for masks
+                            mask_output_dir = os.path.join(log_dir, "masks")
+                            os.makedirs(mask_output_dir, exist_ok=True)
+                            
+                            # === SAVE FINAL RGB FRAME ===
+                            frame_rgb_uint8 = (camera_rgb * 255.0).astype(np.uint8)
+                            frame_bgr = cv2.cvtColor(frame_rgb_uint8, cv2.COLOR_RGB2BGR)
+                            frame_path = os.path.join(mask_output_dir, f"final_frame_step{timestep:04d}.png")
+                            cv2.imwrite(frame_path, frame_bgr)
+                            print(f"[INFO] Final RGB frame saved: {frame_path}")
+                            print(f"       Frame shape: {frame_rgb_uint8.shape}, dtype: {frame_rgb_uint8.dtype}")
+                            
+                            # === CREATE AND SAVE BINARY MASK ===
+                            camera_tensor = torch.from_numpy(camera_rgb).unsqueeze(0).to(torch.float32)  # [1, H, W, C]
+                            
+                            # Get the mask (shape: [1, H, W])
+                            mask = gallbladder_mask_tensor(camera_tensor)
+                            mask_binary = (mask[0].cpu().numpy() > 0.5).astype(np.uint8) * 255  # Convert to 0-255 binary
+                            
+                            # Save the binary mask
+                            mask_path = os.path.join(mask_output_dir, f"gallbladder_mask_step{timestep:04d}.png")
+                            cv2.imwrite(mask_path, mask_binary)
+                            print(f"[INFO] Binary mask saved: {mask_path}")
+                            print(f"       Mask shape: {mask_binary.shape}, unique values: {np.unique(mask_binary)}")
+                            print(f"       White pixels (mask=255): {np.sum(mask_binary == 255)}, "
+                                  f"Black pixels (mask=0): {np.sum(mask_binary == 0)}")
+                        else:
+                            print("[WARNING] No RGB data in camera output")
+                    else:
+                        print("[WARNING] Camera sensor not available for mask/frame save")
+                except ImportError:
+                    print("[WARNING] gallbladder_mask_tensor function not available")
+                except Exception as e:
+                    print(f"[WARNING] Could not save mask/frame at step {timestep}: {type(e).__name__}: {e}")
+            # ===== END MASK/FRAME SAVE =====
+            
             # # Print MAE for Insertion if episode ended before 100 steps
             # if len(insertion_real_moves) > 0:
             #     mae = np.mean(np.abs(np.array(insertion_real_moves) - np.array(insertion_processed)))
             #     print(f"[MAE] Insertion (episode total, {len(insertion_real_moves)} steps): {mae:.6f}")
+            
+            # Save timestep data to Excel if enabled
+            if SAVE_DATA and timestep_data_list:
+                df_timesteps = pd.DataFrame(timestep_data_list)
+                excel_filename = os.path.join(log_dir, f"episode_{timestep}_timesteps.xlsx")
+                df_timesteps.to_excel(excel_filename, index=False)
+                print(f"[INFO] Timestep data saved to: {excel_filename}")
             
             # Save episode data to Excel
             if episode_data:
@@ -525,6 +925,7 @@ def main():
             insertion_processed = []
             episode_data = []  # Reset data for next episode
             observation_data = [] # obs file
+            timestep_data_list = []  # Reset timestep data for next episode
             # timestep = 0
             break
         else:
@@ -532,6 +933,76 @@ def main():
         if args_cli.video and timestep >= args_cli.video_length:
             break
 
+
+    # ===== FINAL POSE SUMMARY =====
+    try:
+        robot_root_pos = robot_asset.data.root_state_w[:, :3]
+        robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
+
+        # Target pose w.r.t. robot reference frame
+        target_pose_w = liver_target_pose_world(base_env)
+        target_pos_w = target_pose_w[:, :3]
+        target_quat_w = target_pose_w[:, 3:7]
+        target_pos_b, target_quat_b = subtract_frame_transforms(
+            robot_root_pos, robot_root_quat, target_pos_w, target_quat_w
+        )
+
+        t_pos_b = target_pos_b[0].detach().cpu().numpy()
+        t_quat_b = target_quat_b[0].detach().cpu().numpy()
+
+        print("\n" + "=" * 80)
+        print("FINAL SUMMARY")
+        print("=" * 80)
+        print(
+            "TARGET pose (robot RF): "
+            f"X={t_pos_b[0]:+.4f}, Y={t_pos_b[1]:+.4f}, Z={t_pos_b[2]:+.4f}, "
+            f"w={t_quat_b[0]:+.4f}, x={t_quat_b[1]:+.4f}, y={t_quat_b[2]:+.4f}, z={t_quat_b[3]:+.4f}"
+        )
+
+        # Camera pose in world + robot frames
+        camera_sensor = None
+        try:
+            camera_sensor = base_env.scene.sensors["camera"]
+        except Exception:
+            try:
+                camera_sensor = base_env.scene["camera"]
+            except Exception:
+                camera_sensor = None
+
+        if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "pos_w"):
+            cam_pos_w_tensor = camera_sensor.data.pos_w
+            cam_pos_w = cam_pos_w_tensor[0].detach().cpu().numpy()
+
+            # Some camera data objects do not expose quaternion; fallback to identity.
+            if hasattr(camera_sensor.data, "quat_w"):
+                cam_quat_w_tensor = camera_sensor.data.quat_w
+            else:
+                cam_quat_w_tensor = torch.zeros((cam_pos_w_tensor.shape[0], 4), device=base_env.device)
+                cam_quat_w_tensor[:, 0] = 1.0
+
+            cam_pos_b, cam_quat_b = subtract_frame_transforms(
+                robot_root_pos, robot_root_quat, cam_pos_w_tensor, cam_quat_w_tensor
+            )
+            cam_pos_b_np = cam_pos_b[0].detach().cpu().numpy()
+            cam_quat_b_np = cam_quat_b[0].detach().cpu().numpy()
+            cam_quat_w_np = cam_quat_w_tensor[0].detach().cpu().numpy()
+
+            print(
+                "CAMERA pose (world):   "
+                f"X={cam_pos_w[0]:+.4f}, Y={cam_pos_w[1]:+.4f}, Z={cam_pos_w[2]:+.4f}, "
+                f"w={cam_quat_w_np[0]:+.4f}, x={cam_quat_w_np[1]:+.4f}, y={cam_quat_w_np[2]:+.4f}, z={cam_quat_w_np[3]:+.4f}"
+            )
+            print(
+                "CAMERA pose (robot RF):"
+                f" X={cam_pos_b_np[0]:+.4f}, Y={cam_pos_b_np[1]:+.4f}, Z={cam_pos_b_np[2]:+.4f}, "
+                f"w={cam_quat_b_np[0]:+.4f}, x={cam_quat_b_np[1]:+.4f}, y={cam_quat_b_np[2]:+.4f}, z={cam_quat_b_np[3]:+.4f}"
+            )
+        else:
+            print("[WARNING] Camera sensor not available for final pose summary.")
+
+        print("=" * 80)
+    except Exception as e:
+        print(f"[WARNING] Could not print final pose summary: {e}")
 
     # close the simulator
     env.close()

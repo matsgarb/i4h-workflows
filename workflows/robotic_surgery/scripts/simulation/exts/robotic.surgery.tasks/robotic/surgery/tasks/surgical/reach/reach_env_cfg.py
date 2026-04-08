@@ -105,7 +105,7 @@ class RewardsCfg:
 
     # task terms
     end_effector_position_tracking = RewTerm(
-        func=mdp.position_command_error,
+        func=mdp.position_command_error, #  distance target - EE = 0 --> end_effector_position_tracking = 0
         weight=-0.2,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "command_name": "ee_pose"},
     )

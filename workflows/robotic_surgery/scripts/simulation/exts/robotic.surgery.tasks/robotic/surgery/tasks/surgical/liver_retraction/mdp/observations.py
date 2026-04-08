@@ -156,15 +156,3 @@ def camera_rgb_frame_stack_observation(env: ManagerBasedRLEnv) -> torch.Tensor:
 #    if rgb_out.shape[-2:] != (84, 84):
 #       rgb_out = F.interpolate(rgb_out, size=(84, 84), mode='bilinear', align_corners=False)
 #    return rgb_out.contiguous()
-
-
-def reset_frame_buffers():
-    """
-    Reset all frame buffers.
-    
-    Call this function when globally resetting the environment 
-    (e.g., episode end, task change).
-    """
-    global _FRAME_BUFFERS
-    _FRAME_BUFFERS.clear()
-    print("[INFO] Frame buffers reset successfully.")

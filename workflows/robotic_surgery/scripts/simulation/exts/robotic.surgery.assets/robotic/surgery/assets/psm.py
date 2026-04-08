@@ -38,6 +38,11 @@ q_z = (math.cos(math.radians(45)/2), 0.0, 0.0, math.sin(math.radians(45)/2))
 q_y = (math.cos(math.radians(60)/2), 0.0, math.sin(math.radians(60)/2), 0.0)
 q_total = quat_mul_wxyz(q_z, q_y)
 
+# -45° around X, 153° around Z
+q_x_neg45 = (math.cos(math.radians(-0)/2), math.sin(math.radians(-0)/2), 0.0, 0.0)
+q_z_153 = (math.cos(math.radians(-90)/2), 0.0, 0.0, math.sin(math.radians(-90)/2))
+q_final_rot = quat_mul_wxyz(q_z_153, q_x_neg45)
+
 
 PSM_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -53,7 +58,7 @@ PSM_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        # # reach_liver OLD POS
+        # reach_liver OLD POS
         # joint_pos={
         #     "psm_yaw_joint":  0.0, # -0.18915,#
         #     "psm_pitch_end_joint": 0.0, # -0.48114, #
@@ -69,27 +74,51 @@ PSM_CFG = ArticulationCfg(
         # joint_pos={
         #     "psm_yaw_joint":  0.0, 
         #     "psm_pitch_end_joint": -0.2, 
-        #     "psm_main_insertion_joint":  0.105,
+        #     "psm_main_insertion_joint": 0.115, # 0.105,
         #     "psm_tool_roll_joint": -0.3,
         #     "psm_tool_pitch_joint":  0.0, 
         #     "psm_tool_yaw_joint":  0.0,
         #     "psm_tool_gripper1_joint": -0.09, 
         #     "psm_tool_gripper2_joint": 0.09, 
-        # },
+        # },    
 
-        # lifting liver 
+        
+        # reach_liver NEWNEW
         joint_pos={
-            "psm_yaw_joint":  -0.01,
-            "psm_pitch_end_joint": -0.3, 
-            "psm_main_insertion_joint":  0.145, # 0.095,
-            "psm_tool_roll_joint": -1.4,
-            "psm_tool_pitch_joint": -0.0256,
-            "psm_tool_yaw_joint": 0.2216,
+            "psm_yaw_joint": 0.9773,  # 56 degrees
+            "psm_pitch_end_joint": -0.3491, # -20 degrees
+            "psm_main_insertion_joint": 0.080,  # 80 mm
+            "psm_tool_roll_joint": 1.0,  # 57 degrees
+            "psm_tool_pitch_joint": 0.0, 
+            "psm_tool_yaw_joint": 0.0,
             "psm_tool_gripper1_joint": -0.09, 
-            "psm_tool_gripper2_joint": 0.09, 
+           "psm_tool_gripper2_joint": 0.09, 
         },
 
-       
+        # # lift liver NEWNEW 
+        # joint_pos={
+        #     "psm_yaw_joint":  0.8836, # 0.92, # 0.95
+        #     "psm_pitch_end_joint": -0.3286, # -0.34, 
+        #     "psm_main_insertion_joint": 0.1045, # 0.105,
+        #     "psm_tool_roll_joint": 0.9168, # 0.95, 
+        #     "psm_tool_pitch_joint": 0.3883, #0.4,
+        #     "psm_tool_yaw_joint": 0.4726, # 0.5, 
+        #     "psm_tool_gripper1_joint": -0.09, 
+        #     "psm_tool_gripper2_joint": 0.09, 
+        # },
+
+        # # lifting liver 
+        # joint_pos={
+        #     "psm_yaw_joint":  -0.01,
+        #     "psm_pitch_end_joint": -0.3, 
+        #     "psm_main_insertion_joint":  0.145, # 0.095,
+        #     "psm_tool_roll_joint": -1.4,
+        #     "psm_tool_pitch_joint": -0.0256,
+        #     "psm_tool_yaw_joint": 0.2216,
+        #     "psm_tool_gripper1_joint": -0.09, 
+        #     "psm_tool_gripper2_joint": 0.09, 
+        # },
+
         # joint_pos={
         #     "psm_yaw_joint": 0.01,
         #     "psm_pitch_end_joint": 0.01,
@@ -100,7 +129,6 @@ PSM_CFG = ArticulationCfg(
         #     "psm_tool_gripper1_joint": -0.09, 
         #     "psm_tool_gripper2_joint": 0.09, 
         #},
-        
         
         # lift_liver (reference values kept for manual tweaking)
         # joint_pos={
@@ -115,10 +143,12 @@ PSM_CFG = ArticulationCfg(
         # },
         # pos=(0.02, 0.02, 0.08), # original pos: 0.0, 0.0, 0.15 ------- 0.02, 0.02, 0.08
         # pos=(-0.03, 0.0, 0.1), # OLD POS
-        pos=(-0.025, 0.015, 0.15), # NEW POS
+        # pos=(-0.025, 0.015, 0.15), # NEW POS
+        pos=(-0.07, 0.05, 0.08), # NEWNEW
         # pos=(0.0, 0.0, 0.1),
         # rot=(q_total), # original orient: (1.0, 0.0, 0.0, 0.0) ------- q_total 
-        rot=(0.2334, 0.0, 0.0, 0.9723),  # 153° rotation around Z (63° + 90°) 
+        # rot=(0.2334, 0.0, 0.0, 0.9723),  # 153° rotation around Z (63° + 90°) NEW POS
+        rot=q_final_rot,  # 153° rotation around Z + -45° rotation around X NEWNEW
         # pos=(0.0, 0.0, 0.15),
         # rot=(1.0, 0.0, 0.0, 0.0),
     ),

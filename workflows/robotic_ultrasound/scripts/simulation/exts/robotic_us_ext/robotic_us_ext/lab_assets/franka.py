@@ -90,6 +90,7 @@ FRANKA_PANDA_CFG = ArticulationCfg(
             velocity_limit=0.2,
             stiffness=2e3,
             damping=1e2,
+            friction=0.0,
         ),
     },
     soft_joint_pos_limit_factor=1.0,

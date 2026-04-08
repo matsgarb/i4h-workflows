@@ -261,6 +261,31 @@ def capture_liver_snapshot_once(
     # print(f"[SNAPSHOT] Salvato nodal_state_w al passo {capture_step} (altezza nodo{node_index} = {node_z:.6f} m)")
 
 
+
+def reset_camera_pose(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    position_noise_m: float = 0.01,  # ± 1 cm
+) -> None:
+    """Randomizza la posizione della camera di ± position_noise_m in ogni direzione."""
+    camera = env.scene[asset_cfg.name]
+
+    # Posizione base (quella definita nell'OffsetCfg)
+    base_pos = torch.tensor([0.1, -0.0, 0.05], device=env.device)  # stessa del tuo offset pos
+
+    # Rumore uniforme: shape (len(env_ids), 3)
+    noise = (torch.rand((len(env_ids), 3), device=env.device) * 2 - 1) * position_noise_m
+
+    new_pos = base_pos.unsqueeze(0) + noise  # (len(env_ids), 3)
+
+    # Applica la nuova posizione mantenendo la rotazione invariata
+    camera.set_world_poses(
+        positions=new_pos,
+        env_ids=env_ids,
+    )
+
+
 def reset_liver_to_snapshot(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,

@@ -112,12 +112,36 @@ class ReachSm:
 def get_gallbladder_mask(rgb_image):
     img = rgb_image.astype(np.float32)
     r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
-    is_not_gray = (np.abs(g - r) > 5) | (np.abs(g - b) > 5)
-    mask_range = (r >= 5) & (r <= 110) & \
-                 (g >= 15) & (g <= 125) & \
-                 (b >= 3)  & (b <= 95)
-    green_dominant = (g > r) & (g > b)
-    final_mask = (is_not_gray & mask_range & green_dominant).astype(np.uint8) * 255
+    
+    # # OLD GB MASK
+    # is_not_gray = (np.abs(g - r) > 5) | (np.abs(g - b) > 5)
+    # mask_range = (r >= 5) & (r <= 110) & \
+    #              (g >= 15) & (g <= 125) & \
+    #              (b >= 3)  & (b <= 95)
+    # green_dominant = (g > r) & (g > b)
+    # final_mask = (is_not_gray & mask_range & green_dominant).astype(np.uint8) * 255
+    
+    # NEW GB MASK 
+    # Basic range for the colors (including lighter tones)
+    r_range = (r >= 0) & (r <= 50)
+    g_range = (g >= 40) & (g <= 165)
+    b_range = (b >= 45) & (b <= 165)
+    
+    # Ensure it's a green-blue tone (not red-dominant)
+    is_greenish_blue = (g > r + 20) & (b > r + 20) & (np.abs(g - b) <= 25)
+    
+    # Exclude grays (where all channels are similar)
+    is_not_gray = (np.abs(g - r) > 15) | (np.abs(b - r) > 15)
+    
+    # Exclude blacks (too dark)
+    is_not_black = (r + g + b) > 40
+    
+    # Exclude whites (too bright)
+    is_not_white = (r + g + b) < 380
+    
+    # Combine all conditions
+    mask_range = r_range & g_range & b_range & is_greenish_blue & is_not_gray & is_not_black & is_not_white
+    final_mask = mask_range.astype(np.uint8) * 255
     visible_pixels = np.sum(final_mask > 0)
     return visible_pixels, final_mask
 
@@ -128,7 +152,7 @@ def main():
     
     # 2. Define the exact joint positions we want (8 joints)
     # yaw, pitch, insertion, tool_roll, tool_pitch, tool_yaw, gripper1, gripper2
-    NEW_RESET_JOINTS = [0.18, 0.1, 0.11, 0.0, 0.0, 0.0, -0.09, 0.09] # [-0.0, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09]
+    # NEW_RESET_JOINTS = [0.18, 0.1, 0.11, 0.0, 0.0, 0.0, -0.09, 0.09] # [-0.0, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09]
     # [-0.0, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09] when psm pos is pos=(0.02, 0.02, 0.08)
     # [-0.25, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09] when psm pos is pos=(0.02, 0.02, 0.05)
     
@@ -156,15 +180,14 @@ def main():
     # # ---------------------------------
     env.reset()
 
-    # create output directory for camera images
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"camera_images_{timestamp}"
-    os.makedirs(output_dir, exist_ok=True)
+    # # create output directory for camera images
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # output_dir = f"camera_images_{timestamp}"
+    # os.makedirs(output_dir, exist_ok=True)
 
     camera = env.unwrapped.scene.sensors["camera"]
 
     robot_asset = env.unwrapped.scene["robot"]
-    
 
     device = env.unwrapped.device
     num_envs = env.unwrapped.num_envs
@@ -248,14 +271,29 @@ def main():
             if step_idx == 0:
                 rest_pos_env = ee_pos_w - env_origins
                 rest_quat_w = ee_quat_w.clone()
-                lift_pos_env = rest_pos_env.clone()
-                lift_pos_env[:, 2] += 0.03 
-                lift_quat_w = rest_quat_w.clone()
+                
+                # # Auto-generated lift position (offset from rest position)
+                # lift_pos_env = rest_pos_env.clone()
+                # lift_pos_env[:, 2] += 0.05 
+                # lift_quat_w = rest_quat_w.clone()
+
+                # Precise lift position (hard-coded in robot reference frame)
+                # Convert from robot RF to world frame using combine_frame_transforms
+                from isaaclab.utils.math import combine_frame_transforms
+                lift_pos_b = torch.tensor([[-0.01, 0.06, -0.09]], device=device).expand(num_envs, -1)
+                # Quaternion in (qw, qx, qy, qz) format
+                lift_quat_b = torch.tensor([[0.7423, 0.1969, -0.1670, 0.6184]], device=device).expand(num_envs, -1)
+                lift_pos_env, lift_quat_w = combine_frame_transforms(robot_pos_w, robot_quat_w, lift_pos_b, lift_quat_b)
 
             rest_pos_b, rest_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, rest_pos_env, rest_quat_w)
             lift_pos_b, lift_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, lift_pos_env, lift_quat_w)
             pose_rest = torch.cat([rest_pos_b, rest_quat_b], dim=-1)
             pose_lift = torch.cat([lift_pos_b, lift_quat_b], dim=-1)
+            
+            # Print lift position and quaternion in robot reference frame at each step
+            if step_idx % 10 == 0:
+                print(f"[Step {step_idx}] LIFT position (robot RF): x={lift_pos_b[0,0]:.4f}, y={lift_pos_b[0,1]:.4f}, z={lift_pos_b[0,2]:.4f}")
+                print(f"[Step {step_idx}] LIFT quaternion (robot RF): qx={lift_quat_b[0,0]:.4f}, qy={lift_quat_b[0,1]:.4f}, qz={lift_quat_b[0,2]:.4f}, qw={lift_quat_b[0,3]:.4f}")
 
             actions = reach_sm.compute(pose_rest, pose_lift)
 
@@ -270,7 +308,7 @@ def main():
             
 
             if camera is not None:
-                should_save = (step_idx % 1 == 0)
+                should_save = (step_idx % 50 == 0)
                 if should_save:
                     cam_out = camera.data.output
                     rgb_tensor = cam_out.get("rgb", None)
@@ -279,6 +317,10 @@ def main():
                         img_rgb = rgb_tensor[0, :, :, :3].cpu().numpy()
                         visible_pixels, gb_mask = get_gallbladder_mask(img_rgb)
                         print(f"[Step {step_idx}] Visible gallbladder pixels: {visible_pixels}")
+                        
+                        # Print joint positions
+                        joint_pos = robot_asset.data.joint_pos[0].cpu().numpy()
+                        print(f"[Step {step_idx}] Joint positions: yaw={joint_pos[0]:.4f}, pitch={joint_pos[1]:.4f}, insertion={joint_pos[2]:.4f}, roll={joint_pos[3]:.4f}, pitch_tool={joint_pos[4]:.4f}, yaw_tool={joint_pos[5]:.4f}, gripper1={joint_pos[6]:.4f}, gripper2={joint_pos[7]:.4f}")
                         
                         # Compute and print EE position and quaternion in robot reference frame
                         ee_pos_b, ee_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, ee_pos_w, ee_quat_w)
@@ -295,13 +337,14 @@ def main():
                         except Exception as e:
                             print(f"[Step {step_idx}] Error computing visual_exposure_reward: {e}")
                         
-                        mask_img = Image.fromarray(gb_mask)
-                        mask_filename = f"{output_dir}/step{step_idx:05d}_mask_gb.png"
-                        mask_img.save(mask_filename)
+                        # mask_img = Image.fromarray(gb_mask)
+                        # mask_filename = f"{output_dir}/step{step_idx:05d}_mask_gb.png"
+                        # mask_img.save(mask_filename)
 
-                        rgb_img = Image.fromarray(img_rgb.astype(np.uint8))
-                        rgb_filename = f"{output_dir}/step{step_idx:05d}_rgb.png"
-                        rgb_img.save(rgb_filename)
+                        # rgb_img = Image.fromarray(img_rgb.astype(np.uint8))
+                        # rgb_filename = f"{output_dir}/step{step_idx:05d}_rgb.png"
+                        # rgb_img.save(rgb_filename)
+                        # print(f"[Step {step_idx}] Saved images to {output_dir}")
             step_idx += 1
 
     env.close()

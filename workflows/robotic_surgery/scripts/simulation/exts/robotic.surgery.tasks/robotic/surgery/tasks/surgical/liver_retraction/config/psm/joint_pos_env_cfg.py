@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from isaaclab.sim.spawners.sensors.sensors_cfg import PinholeCameraCfg
 import torch
 import isaaclab.sim as sim_utils
 import robotic.surgery.tasks.surgical.liver_retraction.mdp as mdp
@@ -67,21 +68,46 @@ class PSMReachEnvCfg(ReachEnvCfg):
         
         q_final = quat_mul(q_yaw, q_pitch).tolist()
 
+
+        # # intrinsic camera parameters
+        # fx, fy   = 366.50, 274.87 
+        # cx, cy   = 160.0, 120.0 
+        # W,  H    = 320, 240 
+        # intrinsic_matrix = [fx, 0, cx,
+        #              0, fy, cy,
+        #              0,  0,  1]
+
+        fx, fy   = 1188.15, 1187.41
+        cx, cy   = 562.09,  408.09
+        W,  H    = 1280,    720
+        intrinsic_matrix = [fx, 0, cx,
+                     0, fy, cy,
+                     0,  0,  1]
+
         # camera
         self.scene.camera = TiledCameraCfg(
             prim_path="{ENV_REGEX_NS}/Camera",
             update_period=0.0, # update period of the sensor buffers (in seconds), if = 0.0 -> update at every step
             history_length = 0, # number of past frames to store in the sensor buffers, defaults to 0 (only the current data is stored)
-            height=240, # height of the image in pixels # 480
-            width=320, # width of the image in pixels. # 640
+            # height=240, # height of the image in pixels # 480
+            # width=320, # width of the image in pixels. # 640
+            height= H, # height of the image in pixels
+            width= W, # width of the image in pixels
             data_types=["rgb"], # , "distance_to_image_plane","semantic_segmentation","instance_segmentation_fast","instance_id_segmentation_fast"], # types of data to be produced by the camera
-            spawn=sim_utils.PinholeCameraCfg(
-                focal_length = 24.0, clipping_range=(0.001, 1.0e5)
+            # spawn=sim_utils.PinholeCameraCfg(
+            #     focal_length = 24.0, clipping_range=(0.001, 1.0e5)
+            # ),
+            spawn = PinholeCameraCfg.from_intrinsic_matrix(
+                intrinsic_matrix = intrinsic_matrix,
+                width            = W,
+                height           = H,
+                clipping_range   = (0.001, 1.0e5),
+                focal_length     = 24.0,
             ),
-
             # reach_liver
-            offset = TiledCameraCfg.OffsetCfg(pos=(0.1, -0.0, 0.05), rot=q_final, convention="world"),
-            
+            # offset = TiledCameraCfg.OffsetCfg(pos=(0.1, -0.0, 0.05), rot=q_final, convention="world"), 
+            # offset = TiledCameraCfg.OffsetCfg(pos=(0.08, -0.0, 0.048), rot=q_final, convention="world"), # from_intrinsic_matrix, focal_length = 1
+            offset = TiledCameraCfg.OffsetCfg(pos=(0.1, -0.0, 0.05), rot=q_final, convention="world"), # from_intrinsic_matrix, focal_length = 24
             # # lift_liver
             # offset = TiledCameraCfg.OffsetCfg(pos=(0.02, -0.0, 0.04), rot=q_final, convention="world"),
         )
@@ -226,26 +252,10 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # ============================================================
         # ===================== ACTIONS OVERRIDE =====================
         # ============================================================
-        # override actions
-        self.actions.arm_action = mdp.JointPositionActionCfg(
-            asset_name="robot",
-            joint_names=[
-                "psm_yaw_joint",
-                "psm_pitch_end_joint",
-                "psm_main_insertion_joint",
-                "psm_tool_roll_joint",
-                "psm_tool_pitch_joint",
-                "psm_tool_yaw_joint",
-            ],
-            scale = 0.02, # STATE BASED RL
-            # scale=0.015, # IMAGE BASED RL
-            use_default_offset=True,
-        )
+        # # override actions
         
-
         
-        # # CAMBIATO
-        # self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
+        # self.actions.arm_action = mdp.JointPositionActionCfg(
         #     asset_name="robot",
         #     joint_names=[
         #         "psm_yaw_joint",
@@ -255,11 +265,27 @@ class PSMReachEnvCfg(ReachEnvCfg):
         #         "psm_tool_pitch_joint",
         #         "psm_tool_yaw_joint",
         #     ],
-        #     # scale = 0.015,
-        #     scale = 0.02,
-        #     use_zero_offset=True,
+        #     scale = 0.02, # STATE BASED RL
+        #     # scale=0.015, # IMAGE BASED RL
+        #     use_default_offset=True,
         # )
         
+        
+        
+        self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=[
+                "psm_yaw_joint",
+                "psm_pitch_end_joint",
+                "psm_main_insertion_joint",
+                "psm_tool_roll_joint",
+                "psm_tool_pitch_joint",
+                "psm_tool_yaw_joint",
+            ],
+            # scale = 0.015,
+            scale = 0.001,
+            use_zero_offset=True,
+        )
         
 
         # =============================================================
@@ -313,14 +339,22 @@ class PSMReachEnvCfg(ReachEnvCfg):
                 # per-joint ranges: [yaw, pitch, insertion, roll, pitch, yaw, gripper 1, gripper 2]
                 # (-0.2, 0.2) for reach STATE based, (-0.1, 0.1) for reach IMAGE based,  (0, 0) for lift
                 "position_ranges": [
-                    (0, 0),  # yaw
-                    (0, 0),  # pitch
-                    (0, 0),  # insertion
-                    (0, 0),  # tool roll
-                    (0, 0),  # tool pitch
-                    (0, 0),  # tool yaw
-                    (0.00, 0.00),  # gripper 1
-                    (0.00, 0.00),  # gripper 2
+                    (-0.0, 0.0),  # yaw
+                    (-0.0, 0.0),  # pitch
+                    (0, 0.00),  # insertionl
+                    (-0.0, 0.0),  # tool roll
+                    (-0.0, 0.0),  # tool pitch
+                    (-0.0, 0.0),  # tool yaw
+                    (0, 0),  # gripper 1
+                    (0, 0),  # gripper 2
+                    # (-0.0, -0.0),  # yaw
+                    # (0.0, 0.0),  # pitch
+                    # (0, 0),  # insertion
+                    # (0, 0),  # tool roll
+                    # (0.0, 0.0),  # tool pitch
+                    # (-0.0, -0.0),  # tool yaw
+                    # (0, 0),  # gripper 1
+                    # (0, 0),  # gripper 2
                 ],
                 "velocity_ranges": [
                     (0.0, 0.0),
@@ -335,7 +369,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
             },
         )
 
-        # # ################# RESET LIVER POSITION
+        # # # # # # ################# RESET LIVER POSITION
         self.events.reset_liver_position = EventTerm(
             func=mdp.reset_nodal_state_uniform,
             mode="reset",
@@ -373,52 +407,50 @@ class PSMReachEnvCfg(ReachEnvCfg):
         #         "asset_cfg": SceneEntityCfg("liver"),
         #     },
         # )
-       
+
+        # self.events.reset_camera_pose = EventTerm(
+        #     func=mdp.reset_camera_pose,
+        #     mode="reset",                      # si attiva ad ogni reset episodio
+        #     params={
+        #         "asset_cfg": SceneEntityCfg("camera"),
+        #         "position_noise_m": 0.01,      # ± 1 cm
+        #     },
+        # )
+            
         
         # # Randomize liver position and rotation at each reset
-        # # +/- 1 cm on X-axis, +/- 15 degrees rotation
         # self.events.reset_liver_position = EventTerm(
         #     func=mdp.reset_nodal_state_uniform,
         #     mode="reset",
         #     params={
-        #         "position_range": {"x": (-0.05, -0.0), "y": (-0.05, -0.0), "z": (0.0, 0.0)},
+        #         "position_range": {"x": (-0.0, -0.0), "y": (-0.02, -0.02), "z": (0.0, 0.0)},
         #         "velocity_range": {},
         #         "asset_cfg": SceneEntityCfg("liver"),
         #     },
         # )
         
         
-
-        # # REACH + INSERT
-        # self.events.reset_phase = EventTerm(func=mdp.reset_phase,mode="reset",)
-        # self.events.phase_update = EventTerm(
-        #     func=mdp.update_phase_reach_to_insert,
-        #     mode="interval",
-        #     interval_range_s=(0.0,0.0),
-        #     params={"asset_cfg": SceneEntityCfg("robot", body_names="psm_tool_tip_link"),"object_cfg": SceneEntityCfg("liver"),"pos_threshold": 0.002,"or_threshold": 0.25},
+        # # ========== ATTACH LIVER NODE TO EE POSITION ==========
+        # # lift_liver - attach node at reset
+        # self.events.attach_liver_node = EventTerm(
+        #     func=mdp.attach_liver_node_to_tcp,
+        #     mode="reset",
+        #     params={
+        #         "node_index": 433, # 433 final_organs_7 # 3, # 26, # 491, 323 final_organs_1
+        #         "asset_cfg": SceneEntityCfg("liver"),
+        #         "tcp_cfg": SceneEntityCfg("ee_frame"),
+        #     },
         # )
-
-        # ========== ATTACH LIVER NODE TO EE POSITION ==========
-        # lift_liver - attach node at reset
-        self.events.attach_liver_node = EventTerm(
-            func=mdp.attach_liver_node_to_tcp,
-            mode="reset",
-            params={
-                "node_index": 433, # 433 final_organs_7 # 3, # 26, # 491, 323 final_organs_1
-                "asset_cfg": SceneEntityCfg("liver"),
-                "tcp_cfg": SceneEntityCfg("ee_frame"),
-            },
-        )
-        self.events.drive_liver_node = EventTerm( # keep node attached to EE at every step
-            func=mdp.drive_liver_node_to_tcp,
-            mode="interval",
-            interval_range_s=(0.001, 0.001),
-            params={
-                "node_index": 433, # 3 #26, # 491, 323 final_organs_1
-                "asset_cfg": SceneEntityCfg("liver"),
-                "tcp_cfg": SceneEntityCfg("ee_frame"),
-            },
-        )
+        # self.events.drive_liver_node = EventTerm( # keep node attached to EE at every step
+        #     func=mdp.drive_liver_node_to_tcp,
+        #     mode="interval",
+        #     interval_range_s=(0.001, 0.001),
+        #     params={
+        #         "node_index": 433, # 3 #26, # 491, 323 final_organs_1
+        #         "asset_cfg": SceneEntityCfg("liver"),
+        #         "tcp_cfg": SceneEntityCfg("ee_frame"),
+        #     },
+        # )
         
 
          

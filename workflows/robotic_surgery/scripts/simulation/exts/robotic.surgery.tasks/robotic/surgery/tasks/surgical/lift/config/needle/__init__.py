@@ -76,11 +76,11 @@ gym.register(
 ##
 
 gym.register(
-    id="Isaac-Lift-Needle-PSM-IK-Rel-v0",
+    id="Isaac-Lift-Needle-PSM-IK-Rel-v0", # (this one used for the RL training)
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": ik_rel_env_cfg.NeedleLiftEnvCfg,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.LiftNeedlePPORunnerCfg,
+        "env_cfg_entry_point": ik_rel_env_cfg.NeedleLiftEnvCfg, # ENV config
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.LiftNeedlePPORunnerCfg, # AGENT RL config
         "robomimic_bc_cfg_entry_point": os.path.join(agents.__path__[0], "robomimic/bc.json"),
     },
     disable_env_checker=True,

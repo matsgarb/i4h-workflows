@@ -131,10 +131,10 @@ def ee_below_target_penalty(
     asset_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("liver"),
 ) -> torch.Tensor:
-    """Penalty when EE Z position goes below target Z position (in robot RF).
+    """Penalty when EE Z position goes more than 1 cm below target Z position (in robot RF).
     
     Returns:
-        torch.Tensor: 1.0 if EE is below target (Z_ee < Z_target), 0.0 otherwise
+        torch.Tensor: 1.0 if EE is more than 1 cm below target (Z_ee < Z_target - 0.01), 0.0 otherwise
     """
     robot: RigidObject = env.scene[asset_cfg.name]
     robot_root_pos_w = robot.data.root_state_w[:, :3]
@@ -155,9 +155,10 @@ def ee_below_target_penalty(
         robot_root_pos_w, robot_root_quat_w, target_pos_w
     )
     
-    # Check if EE Z is below target Z
-    # Return 1.0 where Z_ee < Z_target, 0.0 otherwise
-    penalty = (ee_pos_b[:, 2] < target_pos_b[:, 2]).float()
+    # Check if EE Z is more than 1 cm below target Z
+    # Return 1.0 where Z_ee < (Z_target - 0.01), 0.0 otherwise
+    threshold = 0.01  # 1 cm threshold
+    penalty = (ee_pos_b[:, 2] < target_pos_b[:, 2] - threshold).float()
     
     return penalty
 
@@ -335,14 +336,18 @@ def liver_target_pose_world(
     # target_pos_b = torch.tensor([-0.002, 0.07, -0.085], device=device, dtype=dtype).repeat(num_envs, 1)
     # target_pos_b = torch.tensor([-0.0017, 0.0319, -0.0808], device=device, dtype=dtype).repeat(num_envs, 1)
     
-    target_pos_b = torch.tensor([-0.01, 0.06, -0.09], device=device, dtype=dtype).repeat(num_envs, 1) # NEW LIFT TARGET
+    # target_pos_b = torch.tensor([-0.01, 0.06, -0.09], device=device, dtype=dtype).repeat(num_envs, 1) # NEW LIFT TARGET
     # target_pos_b = torch.tensor([-0.0018, 0.0452, -0.1378], device=device, dtype=dtype).repeat(num_envs, 1) # NEW REACH TARGET
-   
+    target_pos_b = torch.tensor([0.0792, 0.0270, -0.065], device=device, dtype=dtype).repeat(num_envs, 1) # NEWNEW REACH TARGET
+
+    # qw qx qy qz
     # target_quat_b = torch.tensor([0.6002, 0.4988, -0.4274, 0.4564], device=device, dtype=dtype).repeat(num_envs, 1)
     # target_quat_b = torch.tensor([0.7058, 0.3179, -0.2798, 0.5679], device=device, dtype=dtype).repeat(num_envs, 1)
     # target_quat_b = torch.tensor([-0.5231,-0.5274, 0.5553, -0.3739], device=device, dtype=dtype).repeat(num_envs, 1)
     # target_quat_b = torch.tensor([0.936, 0.2062, -0.1264, 0.2557], device=device, dtype=dtype).repeat(num_envs, 1)
-    target_quat_b = torch.tensor([0.7423, 0.1969, -0.1670, 0.6184], device=device, dtype=dtype).repeat(num_envs, 1) # NEW LIFT TARGET
+    target_quat_b = torch.tensor([0.7071068, 0.0, -0.5, -0.5], device=device, dtype=dtype).repeat(num_envs, 1) # NEWNEW REACH TARGET
+    
+    # target_quat_b = torch.tensor([0.7423, 0.1969, -0.1670, 0.6184], device=device, dtype=dtype).repeat(num_envs, 1) # NEW LIFT TARGET
     # target_quat_b = torch.tensor([0.7423, 0.1969, -0.1670, 0.6184], device=device, dtype=dtype).repeat(num_envs, 1) # NEW REACH TARGET
     
     # Transform to world frame
@@ -354,7 +359,6 @@ def liver_target_pose_world(
     # ============== END OPTION 1 ==============
     
     
-    # # IMAGE
     # # VISUALIZATION
     # # global _ee_frame_marker, _curr_ee_marker, _insert_marker # REACH + INSERT
     # global _ee_frame_marker, _curr_ee_marker, _robot_root_marker, _world_frame_marker, _target_node_marker, _prova_rf_marker
@@ -399,15 +403,11 @@ def liver_target_pose_world(
     #         _robot_root_marker_vis.markers["frame"].scale = (0.01, 0.01, 0.01)
     #         _robot_root_marker = VisualizationMarkers(_robot_root_marker_vis)
 
+    #     # COMMENTED: World frame marker disabled
     #     if _world_frame_marker is None:
     #         _world_frame_marker_vis = FRAME_MARKER_CFG.replace(prim_path="/Visuals/WorldFrame")
     #         _world_frame_marker_vis.markers["frame"].scale = (0.01, 0.01, 0.01)
     #         _world_frame_marker = VisualizationMarkers(_world_frame_marker_vis)
-
-    #     # if _prova_rf_marker is None:
-    #     #     _prova_rf_marker_vis = FRAME_MARKER_CFG.replace(prim_path="/Visuals/ProvaRF")
-    #     #     _prova_rf_marker_vis.markers["frame"].scale = (0.015, 0.015, 0.015)  # Slightly larger for visibility
-    #     #     _prova_rf_marker = VisualizationMarkers(_prova_rf_marker_vis)
 
     #     quat_id = torch.zeros((num_envs, 4), device=device, dtype=dtype)
     #     quat_id[:, 0] = 1.0
@@ -445,29 +445,11 @@ def liver_target_pose_world(
         
     #     _robot_root_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
 
-    #     # ProvaRF: Robot root frame translated by -0.0565 along Z (in robot frame coordinates)
-    #     # Same orientation as robot root, only position is offset
-    #     prova_rf_offset_b = torch.tensor([0.0, 0.0, -0.0565], device=device, dtype=dtype).repeat(num_envs, 1)
-    #     quat_identity = torch.zeros((num_envs, 4), device=device, dtype=dtype)
-    #     quat_identity[:, 0] = 1.0
-    #     # Transform offset to world frame, then add to robot root position
-    #     prova_rf_pos_w, _ = combine_frame_transforms(
-    #         robot_root_pos, robot_root_quat, prova_rf_offset_b, quat_identity
-    #     )
-    #     prova_rf_quat_w = robot_root_quat  # Same orientation as robot root frame
-    #     # _prova_rf_marker.visualize(prova_rf_pos_w, prova_rf_quat_w, marker_indices=marker_indices)
-        
-    #     # # DEBUG: Print transformation between RobotRootFrame and ProvaRF
-    #     # if num_envs > 0:
-    #     #     pos_rel = prova_rf_pos_w[0] - robot_root_pos[0]  # Relative position (world frame)
-    #     #     print(f"[Transformation] RobotRootFrame -> ProvaRF:")
-    #     #     print(f"  Position offset (world): [{pos_rel[0]:.6f}, {pos_rel[1]:.6f}, {pos_rel[2]:.6f}]")
-    #     #     print(f"  Relative orientation: Same as RobotRootFrame (identity)")
-
-    #     world_pos = getattr(env.scene, "env_origins", None)
-    #     if world_pos is None:
-    #         world_pos = torch.zeros_like(robot_root_pos)
-    #     _world_frame_marker.visualize(world_pos, quat_id, marker_indices=marker_indices)
+    #     # # COMMENTED: World frame visualization disabled
+    #     # world_pos = getattr(env.scene, "env_origins", None)
+    #     # if world_pos is None:
+    #     #     world_pos = torch.zeros_like(robot_root_pos)
+    #     # _world_frame_marker.visualize(world_pos, quat_id, marker_indices=marker_indices)
     # except Exception as e:
     #     print("[DEBUG] liver target marker error:", e)
     # # END VISUALIZATION
@@ -705,21 +687,28 @@ def gallbladder_mask_tensor(image_tensor):
     b = image_tensor[..., 2]
 
     # 1. Basic color range thresholds for gallbladder detection (matching NumPy version)
-    r_range = (r >= 0) & (r <= 50)
-    g_range = (g >= 40) & (g <= 165)
-    b_range = (b >= 45) & (b <= 165)
+    # r_range = (r >= 0) & (r <= 50)
+    # g_range = (g >= 40) & (g <= 165)
+    # b_range = (b >= 45) & (b <= 165)
+    r_range = (r >= 0) & (r <= 100)
+    g_range = (g >= 30) & (g <= 255)
+    b_range = (b >= 30) & (b <= 255)
     
     # 2. Ensure it's a green-blue tone (not red-dominant)
-    is_greenish_blue = (g > r + 20) & (b > r + 20) & (torch.abs(g - b) <= 25)
+    # is_greenish_blue = (g > r + 20) & (b > r + 20) & (torch.abs(g - b) <= 25)
+    is_greenish_blue = (g > r + 10) & (b > r + 10) & (torch.abs(g - b) <= 30)
     
     # 3. Exclude grays (where all channels are similar)
-    is_not_gray = (torch.abs(g - r) > 15) | (torch.abs(b - r) > 15)
+    # is_not_gray = (torch.abs(g - r) > 15) | (torch.abs(b - r) > 15)
+    is_not_gray = (torch.abs(g - r) > 8) | (torch.abs(b - r) > 8)
     
     # 4. Exclude blacks (too dark)
-    is_not_black = (r + g + b) > 40
+    # is_not_black = (r + g + b) > 40
+    is_not_black = (r + g + b) > 30
     
     # 5. Exclude whites (too bright)
-    is_not_white = (r + g + b) < 380
+    # is_not_white = (r + g + b) < 380
+    is_not_white = (r + g + b) < 500
 
     # Combine all conditions into final mask (True/False)
     final_mask = r_range & g_range & b_range & is_greenish_blue & is_not_gray & is_not_black & is_not_white
@@ -738,22 +727,29 @@ def gallbladder_pixel_count(rgb_image):
     img = rgb_image.astype(np.float32)
     r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
     
-    # Basic range for the colors (including lighter tones)
-    r_range = (r >= 0) & (r <= 50)
-    g_range = (g >= 40) & (g <= 165)
-    b_range = (b >= 45) & (b <= 165)
-    
+    # # Basic range for the colors (including lighter tones)
+    # r_range = (r >= 0) & (r <= 50)
+    # g_range = (g >= 40) & (g <= 165)
+    # b_range = (b >= 45) & (b <= 165)
+    r_range = (r >= 0) & (r <= 100)
+    g_range = (g >= 30) & (g <= 255)
+    b_range = (b >= 30) & (b <= 255)
+
     # Ensure it's a green-blue tone (not red-dominant)
-    is_greenish_blue = (g > r + 20) & (b > r + 20) & (np.abs(g - b) <= 25)
+    # RELAXED: green/blue need to be > red + 10 (was +20) to capture lighter tones
+    is_greenish_blue = (g > r + 10) & (b > r + 10) & (np.abs(g - b) <= 30)
     
     # Exclude grays (where all channels are similar)
-    is_not_gray = (np.abs(g - r) > 15) | (np.abs(b - r) > 15)
+    # is_not_gray = (np.abs(g - r) > 15) | (np.abs(b - r) > 15)
+    is_not_gray = (np.abs(g - r) > 8) | (np.abs(b - r) > 8)
     
     # Exclude blacks (too dark)
-    is_not_black = (r + g + b) > 40
+    # is_not_black = (r + g + b) > 40
+    is_not_black = (r + g + b) > 30
     
     # Exclude whites (too bright)
-    is_not_white = (r + g + b) < 380
+    # is_not_white = (r + g + b) < 380
+    is_not_white = (r + g + b) < 500
     
     # Combine all conditions
     mask_range = r_range & g_range & b_range & is_greenish_blue & is_not_gray & is_not_black & is_not_white
@@ -822,6 +818,7 @@ def gallbladder_pixel_count(rgb_image):
 
 
 
+
 def visual_exposure_reward(env):
     """Visual exposure reward based on gallbladder pixel visibility.
     
@@ -873,7 +870,8 @@ def visual_exposure_reward(env):
     # Apply warmup: zero out rewards for first 2 steps of each episode
     # episode_length_buf starts at 1 for the first step, 2 for the second, etc.
     if hasattr(env, 'episode_length_buf'):
-        warmup_mask = env.episode_length_buf <= 2  # Steps 0 and 1 (first two steps)
+        warmup_mask = env.episode_length_buf <= 0  # Steps 0 and 1 (first two steps) 
+        # warmup_mask = env.episode_length_buf <= 2
         reward_tensor[warmup_mask] = 0.0
     
     return reward_tensor
@@ -936,3 +934,47 @@ def gallbladder_visibility_success(env: ManagerBasedRLEnv, pixel_threshold: floa
     except Exception as e:
         # If camera is not available or error occurs, return False for all environments
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+
+
+def vertical_lifting_reward(env, lateral_penalty_coef: float = 1.0) -> torch.Tensor:
+    """Reward that encourages vertical lifting (Z axis) and penalizes lateral movement.
+    
+    Computes the TCP displacement relative to the reset position and rewards the positive
+    Z component while penalizing lateral components (X, Y).
+    
+    Args:
+        env: ManagerBasedRLEnv instance.
+        lateral_penalty_coef: Weight of lateral penalty (α). Default 1.0.
+    
+    Returns:
+        torch.Tensor: Reward per environment (shape: num_envs).
+    """
+    # Current TCP (end-effector) position in world frame
+    ee_pos_w = env.scene["ee_frame"].data.target_pos_w[:, 0, :]  # (num_envs, 3)
+    
+    # Default (reset) TCP position
+    # We use joint default to reconstruct the initial position, or save it at reset.
+    # Simple approach: compare with position from current episode step-by-step.
+    # To obtain Δ from reset, save position at first step.
+    
+    if not hasattr(env, '_ee_reset_pos'):
+        env._ee_reset_pos = ee_pos_w.clone()
+    
+    # At reset (episode_length_buf == 1), update the reference position
+    reset_mask = env.episode_length_buf <= 1
+    env._ee_reset_pos[reset_mask] = ee_pos_w[reset_mask].clone()
+    
+    # Displacement from reset
+    delta = ee_pos_w - env._ee_reset_pos  # (num_envs, 3)
+    
+    delta_z = delta[:, 2]   # vertical component (positive = lifting)
+    delta_x = delta[:, 0]
+    delta_y = delta[:, 1]
+    
+    # Reward: rewards positive z, penalizes lateral norm
+    lateral_norm = torch.sqrt(delta_x**2 + delta_y**2 + 1e-8)
+    
+    reward = torch.clamp(delta_z, min=0.0) - lateral_penalty_coef * lateral_norm
+    
+    return reward
