@@ -237,13 +237,8 @@ def main():
                 else:
                     filtered_actions = action_filter_alpha * actions + (1.0 - action_filter_alpha) * filtered_actions
                 actions_to_use = filtered_actions
-                raw_val = actions[0, 2].cpu().item()  # Joint 2 (Insertion)
-                filtered_val = actions_to_use[0, 2].cpu().item()
-                print(f"[FILTER DEBUG] Joint 2 (Insertion): RAW={raw_val:+.4f} → FILTERED={filtered_val:+.4f} (alpha={action_filter_alpha})")
             else:
                 actions_to_use = actions
-                raw_val = actions[0, 2].cpu().item()
-                print(f"[NO FILTER] Joint 2 (Insertion): RAW={raw_val:+.4f} → USED AS-IS={raw_val:+.4f}")
 
             ### (12) EXECUTE ACTION IN ENVIRONMENT AND GET NEW STATE (SIMULATION STEP) ###
             obs, rewards, dones, extras = env.step(actions_to_use) 
@@ -295,175 +290,186 @@ def main():
             pos_after = robot_asset.data.joint_pos[0][:6].cpu().numpy()
             real_move = pos_after - pos_before
 
-            ### (16) POSE EXTRACTION AND ERROR COMPUTATION ###
-            # computation of EE and target poses, and calculation of distance and orientation errors
-            robot_root_pos = robot_asset.data.root_state_w[:, :3]
-            robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
-            
-            # target liver pose
-            target_pose_w = liver_target_pose_world(base_env)
-            target_pos_w, target_quat_w = target_pose_w[:, :3], target_pose_w[:, 3:7]
-            target_pos_b, target_quat_b = subtract_frame_transforms(
-                robot_root_pos, robot_root_quat, target_pos_w, target_quat_w
-            )
+            ### (16) POSE EXTRACTION AND ERROR COMPUTATION (ONLY IF NOT DONE) ###
+            # Skip error calculation on the final step when done=True, because the environment 
+            # has already reset the robot to initial position. Use the previously calculated errors instead.
+            if not done_flag:
+                # computation of EE and target poses, and calculation of distance and orientation errors
+                robot_root_pos = robot_asset.data.root_state_w[:, :3]
+                robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
+                
+                # target liver pose
+                target_pose_w = liver_target_pose_world(base_env)
+                target_pos_w, target_quat_w = target_pose_w[:, :3], target_pose_w[:, 3:7]
+                target_pos_b, target_quat_b = subtract_frame_transforms(
+                    robot_root_pos, robot_root_quat, target_pos_w, target_quat_w
+                )
 
-            # ee pose 
-            ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
-            ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
-            ee_pos_b, ee_quat_b = subtract_frame_transforms(
-                robot_root_pos, robot_root_quat, ee_pos_w, ee_quat_w
-            )
+                # ee pose 
+                ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
+                ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
+                ee_pos_b, ee_quat_b = subtract_frame_transforms(
+                    robot_root_pos, robot_root_quat, ee_pos_w, ee_quat_w
+                )
 
-            # convert all poses to numpy for printing and visualization
-            t_pos_b = target_pos_b[0].cpu().numpy()
-            t_quat_b = target_quat_b[0].cpu().numpy()
-            e_pos_b = ee_pos_b[0].cpu().numpy()
-            e_quat_b = ee_quat_b[0].cpu().numpy()
+                # convert all poses to numpy for printing and visualization
+                t_pos_b = target_pos_b[0].cpu().numpy()
+                t_quat_b = target_quat_b[0].cpu().numpy()
+                e_pos_b = ee_pos_b[0].cpu().numpy()
+                e_quat_b = ee_quat_b[0].cpu().numpy()
 
-            # compute distance error (Euclidean distance between EE position and target position in robot reference frame)
-            # and orientation error (angle between EE orientation and target orientation in robot reference frame)
-            ee_pos_b_tensor = torch.tensor(e_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-            ee_quat_b_tensor = torch.tensor(e_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-            t_pos_b_tensor = torch.tensor(t_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-            t_quat_b_tensor = torch.tensor(t_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-            
-            dist_error = torch.norm(ee_pos_b_tensor - t_pos_b_tensor, dim=1)[0].cpu().item()
-            orient_error = quat_error_magnitude(ee_quat_b_tensor, t_quat_b_tensor)[0].cpu().item()
+                # compute distance error (Euclidean distance between EE position and target position in robot reference frame)
+                # and orientation error (angle between EE orientation and target orientation in robot reference frame)
+                ee_pos_b_tensor = torch.tensor(e_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                ee_quat_b_tensor = torch.tensor(e_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                t_pos_b_tensor = torch.tensor(t_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                t_quat_b_tensor = torch.tensor(t_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                
+                dist_error = torch.norm(ee_pos_b_tensor - t_pos_b_tensor, dim=1)[0].cpu().item()
+                orient_error = quat_error_magnitude(ee_quat_b_tensor, t_quat_b_tensor)[0].cpu().item()
 
-            ### (17) REFERENCE FRAME VISUALIZATION BASED ON FLAG ###
-            if SHOW_REF_FRAMES:
-                try:
-                    num_envs = robot_root_pos.shape[0]
-                    marker_indices = torch.zeros(num_envs, dtype=torch.int32, device=base_env.device)
-
-                    if robot_root_frame_marker is None:
-                        robot_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/RobotRootFrame_Play")
-                        robot_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
-                        robot_root_frame_marker = VisualizationMarkers(robot_cfg)
-
-                    if target_frame_marker is None:
-                        target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TargetFrame_Play")
-                        target_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
-                        target_frame_marker = VisualizationMarkers(target_cfg)
-
-                    if camera_frame_marker is None:
-                        cam_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CameraFrame_Play")
-                        cam_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
-                        camera_frame_marker = VisualizationMarkers(cam_cfg)
-
-                    if target_point_marker is None:
-                        point_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/TargetPoint_Play")
-                        target_point_marker = VisualizationMarkers(point_cfg)
-
-                    if "ee_marker" not in locals():
-                        ee_marker = None
-                    if ee_marker is None:
-                        ee_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame_Play")
-                        ee_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
-                        ee_marker = VisualizationMarkers(ee_marker_cfg)
-
-                    # Robot root frame
-                    robot_root_frame_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
-
-                    # Target frame + point (world frame)
-                    target_frame_marker.visualize(target_pos_w, target_quat_w, marker_indices=marker_indices)
-                    quat_id = torch.zeros((num_envs, 4), device=base_env.device, dtype=target_pos_w.dtype)
-                    quat_id[:, 0] = 1.0
-                    target_point_marker.visualize(target_pos_w, quat_id, marker_indices=marker_indices)
-
-                    # Camera frame (world frame)
-                    camera_sensor = None
+                ### (17) REFERENCE FRAME VISUALIZATION BASED ON FLAG ###
+                if SHOW_REF_FRAMES:
                     try:
-                        camera_sensor = base_env.scene.sensors["camera"]
-                    except Exception:
+                        num_envs = robot_root_pos.shape[0]
+                        marker_indices = torch.zeros(num_envs, dtype=torch.int32, device=base_env.device)
+
+                        if robot_root_frame_marker is None:
+                            robot_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/RobotRootFrame_Play")
+                            robot_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            robot_root_frame_marker = VisualizationMarkers(robot_cfg)
+
+                        if target_frame_marker is None:
+                            target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TargetFrame_Play")
+                            target_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            target_frame_marker = VisualizationMarkers(target_cfg)
+
+                        if camera_frame_marker is None:
+                            cam_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CameraFrame_Play")
+                            cam_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            camera_frame_marker = VisualizationMarkers(cam_cfg)
+
+                        if target_point_marker is None:
+                            point_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/TargetPoint_Play")
+                            target_point_marker = VisualizationMarkers(point_cfg)
+
+                        if "ee_marker" not in locals():
+                            ee_marker = None
+                        if ee_marker is None:
+                            ee_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame_Play")
+                            ee_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            ee_marker = VisualizationMarkers(ee_marker_cfg)
+
+                        # Robot root frame
+                        robot_root_frame_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
+
+                        # Target frame + point (world frame)
+                        target_frame_marker.visualize(target_pos_w, target_quat_w, marker_indices=marker_indices)
+                        quat_id = torch.zeros((num_envs, 4), device=base_env.device, dtype=target_pos_w.dtype)
+                        quat_id[:, 0] = 1.0
+                        target_point_marker.visualize(target_pos_w, quat_id, marker_indices=marker_indices)
+
+                        # Camera frame (world frame)
+                        camera_sensor = None
                         try:
-                            camera_sensor = base_env.scene["camera"]
+                            camera_sensor = base_env.scene.sensors["camera"]
                         except Exception:
-                            camera_sensor = None
+                            try:
+                                camera_sensor = base_env.scene["camera"]
+                            except Exception:
+                                camera_sensor = None
 
-                    if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "pos_w"):
-                        cam_pos_w = camera_sensor.data.pos_w
-                        if hasattr(camera_sensor.data, "quat_w"):
-                            cam_quat_w = camera_sensor.data.quat_w
-                        else:
-                            cam_quat_w = torch.zeros((num_envs, 4), device=base_env.device, dtype=cam_pos_w.dtype)
-                            cam_quat_w[:, 0] = 1.0
-                        camera_frame_marker.visualize(cam_pos_w, cam_quat_w, marker_indices=marker_indices)
+                        if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "pos_w"):
+                            cam_pos_w = camera_sensor.data.pos_w
+                            if hasattr(camera_sensor.data, "quat_w"):
+                                cam_quat_w = camera_sensor.data.quat_w
+                            else:
+                                cam_quat_w = torch.zeros((num_envs, 4), device=base_env.device, dtype=cam_pos_w.dtype)
+                                cam_quat_w[:, 0] = 1.0
+                            camera_frame_marker.visualize(cam_pos_w, cam_quat_w, marker_indices=marker_indices)
 
-                    # EE frame (world frame)
-                    ee_marker.visualize(ee_pos_w, ee_quat_w, marker_indices=marker_indices)
-                except Exception as e:
-                    print(f"[DEBUG] ref-frame visualization error: {e}")
+                        # EE frame (world frame)
+                        ee_marker.visualize(ee_pos_w, ee_quat_w, marker_indices=marker_indices)
+                    except Exception as e:
+                        print(f"[DEBUG] ref-frame visualization error: {e}")
 
-            ### (18) PRINT INFO ABOUT POSES, ERRORS, AND ACTIONS FOR EACH SIMULATION STEP ###
-            print("EE frame (robot RF):   X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
-                e_pos_b[0], e_pos_b[1], e_pos_b[2], e_quat_b[0], e_quat_b[1], e_quat_b[2], e_quat_b[3]))
-            print("TARGET pose (robot RF): X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
-                t_pos_b[0], t_pos_b[1], t_pos_b[2], t_quat_b[0], t_quat_b[1], t_quat_b[2], t_quat_b[3]))
-            print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad")
-            
-            # success criteria check (when dist_error < 3mm and orient_error < 0.3 rad, we consider the target reached)
-            if dist_error < 0.003 and orient_error < 0.3:
-                print("\n" + "=" * 80)
-                print("TARGET REACHED!")
-                print("=" * 80)
-                print(f"DISTANCE ERROR: {dist_error:.6f} m (threshold: < 0.003)")
-                print(f"ORIENTATION ERROR: {orient_error:.6f} rad (threshold: < 0.3)")
-                print("=" * 80 + "\n")
-
-            # print observations (joint_pos(8) + joint_vel(8) + actions(6) = 22)
-            obs_size = len(obs_flat)
-            joint_pos_obs = obs_flat[:8] 
-            joint_vel_obs = obs_flat[8:16] 
-            actions_obs = obs_flat[16:22]
-
-            print(f"\nOBSERVATIONS (size={obs_size}):")
-            print(f"  joint_pos_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
-            print(f"  joint_vel_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
-            print(f"  last_action (6):      {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
-            
-            # print actions and pose info for each joint in a table format
-            header = f"{'JOINT':<10} | {'POSITION':>10} | {'RAW POLICY':>10} | {'PROCESSED':>10} | {'REAL MOVE':>10}"
-            print(header)
-            print("-" * len(header))
-            for i in range(6):
-                print(f"{joint_names[i]:<10} | "
-                      f"{pos_after[i]:>10.5f} | "
-                      f"{raw_policy[i]:>10.5f} | "
-                      f"{processed_actions[i]:>10.5f} | "
-                      f"{real_move[i]:>10.5f}")
-            print("=" * len(header))
-            print("="*80 + "\n")
-            
-            ### (19) SAVE TIMESTEP DATA TO LIST FOR EXCEL EXPORT AT EPISODE END ###
-            if SAVE_DATA:
-                # Create a row for this timestep
-                row_data = {'timestep': timestep}
-    
-                # Add position (6 joints)
-                for j in range(6):
-                    row_data[f'position_j{j}'] = pos_after[j]
+                ### (18) PRINT INFO ABOUT POSES, ERRORS, AND ACTIONS FOR EACH SIMULATION STEP ###
+                print("EE frame (robot RF):   X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
+                    e_pos_b[0], e_pos_b[1], e_pos_b[2], e_quat_b[0], e_quat_b[1], e_quat_b[2], e_quat_b[3]))
+                print("TARGET pose (robot RF): X={:.4f}, Y={:.4f}, Z={:.4f}, w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
+                    t_pos_b[0], t_pos_b[1], t_pos_b[2], t_quat_b[0], t_quat_b[1], t_quat_b[2], t_quat_b[3]))
+                print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad")
                 
-                # Add raw policy (6 values)
-                for j in range(6):
-                    row_data[f'raw_policy_j{j}'] = raw_policy[j]
-                
-                # Add processed actions (6 values)
-                for j in range(6):
-                    row_data[f'processed_actions_j{j}'] = processed_actions[j]
-                
-                # Add real movement (6 values)
-                for j in range(6):
-                    row_data[f'real_movement_j{j}'] = real_move[j]
-                
-                # Add distance and orientation errors
-                row_data['distance_error'] = dist_error
-                row_data['orientation_error'] = orient_error
-                
-                # Append to list
-                timestep_data_list.append(row_data)
+                # success criteria check (when dist_error < 3mm and orient_error < 0.3 rad, we consider the target reached)
+                if dist_error < 0.003 and orient_error < 0.3:
+                    print("\n" + "=" * 80)
+                    print("TARGET REACHED!")
+                    print("=" * 80)
+                    print(f"DISTANCE ERROR: {dist_error:.6f} m (threshold: < 0.003)")
+                    print(f"ORIENTATION ERROR: {orient_error:.6f} rad (threshold: < 0.3)")
+                    print("=" * 80 + "\n")
 
-        ### (20) CHECK FOR EPISODE TERMINATION AND LOGGING ###
+                # print observations (joint_pos(8) + joint_vel(8) + actions(6) = 22)
+                obs_size = len(obs_flat)
+                joint_pos_obs = obs_flat[:8] 
+                joint_vel_obs = obs_flat[8:16] 
+                actions_obs = obs_flat[16:22]
+
+                print(f"\nOBSERVATIONS (size={obs_size}):")
+                print(f"  joint_pos_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
+                print(f"  joint_vel_rel (8):    {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
+                print(f"  last_action (6):      {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
+                
+                # print actions and pose info for each joint in a table format
+                header = f"{'JOINT':<10} | {'POSITION':>10} | {'RAW POLICY':>10} | {'PROCESSED':>10} | {'REAL MOVE':>10}"
+                print(header)
+                print("-" * len(header))
+                for i in range(6):
+                    print(f"{joint_names[i]:<10} | "
+                          f"{pos_after[i]:>10.5f} | "
+                          f"{raw_policy[i]:>10.5f} | "
+                          f"{processed_actions[i]:>10.5f} | "
+                          f"{real_move[i]:>10.5f}")
+                print("=" * len(header))
+                print("="*80 + "\n")
+                
+                ### (19) SAVE TIMESTEP DATA TO LIST FOR EXCEL EXPORT AT EPISODE END ###
+                if SAVE_DATA:
+                    # Create a row for this timestep
+                    row_data = {'timestep': timestep}
+        
+                    # Add position (6 joints)
+                    for j in range(6):
+                        row_data[f'position_j{j}'] = pos_after[j]
+                    
+                    # Add raw policy (6 values)
+                    for j in range(6):
+                        row_data[f'raw_policy_j{j}'] = raw_policy[j]
+                    
+                    # Add processed actions (6 values)
+                    for j in range(6):
+                        row_data[f'processed_actions_j{j}'] = processed_actions[j]
+                    
+                    # Add real movement (6 values)
+                    for j in range(6):
+                        row_data[f'real_movement_j{j}'] = real_move[j]
+                    
+                    # Add distance and orientation errors
+                    row_data['distance_error'] = dist_error
+                    row_data['orientation_error'] = orient_error
+                    
+                    # Append to list
+                    timestep_data_list.append(row_data)
+
+
+
+        ### (20) SAVE FINAL ERROR METRICS BEFORE TERMINATION CHECK ###
+        final_dist_error = dist_error
+        final_orient_error = orient_error
+        final_timestep = timestep
+        final_episode_reason = "UNKNOWN"
+
+        ### (21) CHECK FOR EPISODE TERMINATION AND LOGGING ###
         done_flag = False
         if torch.is_tensor(dones):
             done_flag = bool(torch.any(dones))
@@ -474,8 +480,6 @@ def main():
 
         if done_flag:
             # determine the reason for episode termination
-            episode_reason = "UNKNOWN"
-        
             if isinstance(extras, dict) and "log" in extras:
                 log = extras["log"]
                 time_out_value = log.get("Episode_Termination/time_out", 0)
@@ -486,11 +490,11 @@ def main():
                     success_value = success_value.item()
                 
                 if success_value == 1:
-                    episode_reason = "ACHIEVED SUCCESS"
+                    final_episode_reason = "ACHIEVED SUCCESS"
                 elif time_out_value == 1:
-                    episode_reason = "TIME OUT"
+                    final_episode_reason = "TIME OUT"
             
-            print(f"[INFO] Episode terminated: {episode_reason}")
+            print(f"[INFO] Episode terminated: {final_episode_reason}")
             # print initial joint positions at termination on one line
             pos_str = " ".join([f"{p:.5f}".replace(".", ",") for p in initial_pos])
             print(f"Initial position of the joints: {pos_str}")
@@ -527,32 +531,18 @@ def main():
             break
 
 
-    ### (21) FINAL POSE SUMMARY PRINTING ###
+    ### (22) FINAL SUMMARY PRINTING (using pre-termination values) ###
     try:
-        robot_root_pos = robot_asset.data.root_state_w[:, :3]
-        robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
-
-        # Target pose w.r.t. robot reference frame
-        target_pose_w = liver_target_pose_world(base_env)
-        target_pos_w = target_pose_w[:, :3]
-        target_quat_w = target_pose_w[:, 3:7]
-        target_pos_b, target_quat_b = subtract_frame_transforms(
-            robot_root_pos, robot_root_quat, target_pos_w, target_quat_w
-        )
-
-        t_pos_b = target_pos_b[0].detach().cpu().numpy()
-        t_quat_b = target_quat_b[0].detach().cpu().numpy()
-
         print("\n" + "=" * 80)
         print("FINAL SUMMARY")
         print("=" * 80)
-        print(
-            "TARGET pose (robot RF): "
-            f"X={t_pos_b[0]:+.4f}, Y={t_pos_b[1]:+.4f}, Z={t_pos_b[2]:+.4f}, "
-            f"w={t_quat_b[0]:+.4f}, x={t_quat_b[1]:+.4f}, y={t_quat_b[2]:+.4f}, z={t_quat_b[3]:+.4f}"
-        )
+        print(f"Episode terminated: {final_episode_reason}")
+        print(f"Total steps to completion: {final_timestep}")
+        print(f"DISTANCE ERROR: {final_dist_error*1000:.4f} mm (threshold: 3.0 mm)")
+        print(f"ORIENTATION ERROR: {final_orient_error*180/np.pi:.4f}° ({final_orient_error:.6f} rad, threshold: 0.3 rad)")
+        print("=" * 80)
     except Exception as e:
-        print(f"[WARN] Unable to compute final pose summary: {e}")
+        print(f"[WARN] Unable to compute final summary: {e}")
     
     ### (22) CLOSE ENVIRONMENT AND SIMULATION APP ###
     env.close()
