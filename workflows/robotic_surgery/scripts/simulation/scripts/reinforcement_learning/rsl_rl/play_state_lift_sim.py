@@ -37,39 +37,36 @@ if args_cli.video:
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
-
+# import libraries
 import os
 import numpy as np
 import gymnasium as gym
-import robotic.surgery.tasks  # noqa: F401
+import robotic.surgery.tasks
 import torch
-import cv2  # For saving mask images
+import cv2
+import struct
+import pandas as pd
+from tensordict import TensorDict
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.utils.dict import print_dict
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
-
-
 from rsl_rl.runners import OnPolicyRunner
 from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world, gallbladder_pixel_count, gallbladder_visibility_success, visual_exposure_reward, vertical_lifting_reward
+from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import gallbladder_mask_tensor
 from isaaclab.managers.reward_manager import RewardTermCfg
 from isaaclab.envs.mdp.rewards import joint_vel_l2
 from isaaclab.utils.math import quat_error_magnitude
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG, POSITION_GOAL_MARKER_CFG
-import socket
-import struct
-import time
-import pandas as pd
-import json
 
 
 
 def main():
-    """Play with RSL-RL agent."""
+    ### (1) ENV and AGENT CONFIGURATION ###
+    
     # parse configuration
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
@@ -83,85 +80,10 @@ def main():
     resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
 
-    # ===== LOAD OBSERVATIONS FROM EXCEL FOR OVERRIDE =====
-    # Load observation data to override joint_pos_rel for ground truth comparison
-    # DISABLED BY DEFAULT - Set OVERRIDE_OBSERVATIONS_FROM_EXCEL = True to enable
-    OVERRIDE_OBSERVATIONS_FROM_EXCEL = False  # <-- Set to True to load from Excel file
-    
-    excel_obs_file = os.path.join(log_dir, "episode_599_observations.xlsx")
-    override_obs_data = None
-    override_column_indices = None
-    
-    if OVERRIDE_OBSERVATIONS_FROM_EXCEL:
-        print(f"\n[DEBUG] Looking for Excel file at: {excel_obs_file}")
-        print(f"[DEBUG] File exists: {os.path.exists(excel_obs_file)}")
-        
-        if os.path.exists(excel_obs_file):
-            try:
-                df_obs = pd.read_excel(excel_obs_file)
-                print(f"[INFO] ✓ Loaded observation Excel file")
-                print(f"[INFO] Shape: {df_obs.shape[0]} rows × {df_obs.shape[1]} cols")
-                print(f"[INFO] Columns: {df_obs.columns.tolist()}")
-                
-                # Find joint position columns - try multiple naming patterns
-                noisy_pos_cols = [col for col in df_obs.columns if col.startswith('noisy_pos_')]
-                true_pos_cols = [col for col in df_obs.columns if col.startswith('true_pos_')]
-                obs_joint_pos_cols = [col for col in df_obs.columns if col.startswith('obs_joint_pos_')]
-                joint_pos_cols = [col for col in df_obs.columns if 'joint_pos' in col.lower() and col != 'timestep']
-                
-                print(f"[DEBUG] Found {len(noisy_pos_cols)} 'noisy_pos_*' columns")
-                print(f"[DEBUG] Found {len(true_pos_cols)} 'true_pos_*' columns")
-                print(f"[DEBUG] Found {len(obs_joint_pos_cols)} 'obs_joint_pos_*' columns")
-                print(f"[DEBUG] Found {len(joint_pos_cols)} 'joint_pos_*' columns (excluding 'timestep')")
-                
-                # Choose which columns to use (prefer noisy_pos, then true_pos, then obs_joint_pos, then generic joint_pos)
-                if len(noisy_pos_cols) >= 6:
-                    selected_cols = noisy_pos_cols[:6]
-                    print(f"[INFO] ✓ Using 'noisy_pos_*' columns for override")
-                elif len(true_pos_cols) >= 6:
-                    selected_cols = true_pos_cols[:6]
-                    print(f"[INFO] ✓ Using 'true_pos_*' columns for override")
-                elif len(obs_joint_pos_cols) >= 6:
-                    selected_cols = obs_joint_pos_cols[:6]
-                    print(f"[INFO] ✓ Using 'obs_joint_pos_*' columns for override")
-                elif len(joint_pos_cols) >= 6:
-                    selected_cols = joint_pos_cols[:6]
-                    print(f"[INFO] ✓ Using 'joint_pos_*' columns: {selected_cols}")
-                else:
-                    # Try just taking first 6 numeric columns, excluding 'timestep' and 'step'
-                    numeric_cols = [col for col in df_obs.columns if col not in ['timestep', 'step', 'Step']][:6]
-                    if len(numeric_cols) >= 6:
-                        selected_cols = numeric_cols
-                        print(f"[INFO] ⚠ Using first 6 columns (excluding timestep/step): {selected_cols}")
-                    else:
-                        selected_cols = None
-                        print(f"[WARNING] Could not find 6 joint position columns!")
-                
-                if selected_cols is not None:
-                    override_obs_data = df_obs
-                    override_column_indices = selected_cols
-                    print(f"[INFO] Will override joint_pos with columns: {override_column_indices}")
-                
-            except Exception as e:
-                print(f"[ERROR] Could not load observation Excel file: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
-            print(f"[WARNING] Observation file NOT FOUND: {excel_obs_file}")
-            print(f"[DEBUG] Listing files in log_dir:")
-            try:
-                for fname in os.listdir(log_dir)[:10]:
-                    print(f"  - {fname}")
-            except Exception as e:
-                print(f"  (could not list: {e})")
-    else:
-        print(f"[INFO] Observation override DISABLED - using simulation observations only")
-        print(f"[INFO] To enable override, set OVERRIDE_OBSERVATIONS_FROM_EXCEL = True")
-    # =====================================================
-
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-    # wrap for video recording
+    
+    # wrap for video recording 
     if args_cli.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "play"),
@@ -177,24 +99,24 @@ def main():
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # wrap around environment for rsl-rl
+    # wrap around environment for rsl-rl compatibility 
     env = RslRlVecEnvWrapper(env)
 
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-   
-    ########## NEW RSL_RL STATE BASED RL ##########
-    from tensordict import TensorDict
+    ### (2)TENSORDICT COMPATIBILITY PATCH ###
+    # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key.
+    # This patch ensures that the environment's observations are converted to the expected
+    # format without modifying the original environment code. 
+    # It wraps the original get_observations and step functions to convert outputs to TensorDicts as needed.
+    
     def ensure_tensordict(data):
-        # Extract data if it's a tuple (obs, extras)
+        """Convert any observation format to TensorDict with 'policy' key."""
         obs = data[0] if isinstance(data, tuple) else data
         if isinstance(obs, TensorDict): return obs
         if isinstance(obs, dict): return TensorDict(obs, batch_size=env.num_envs)
-        # Pack the tensor under the "policy" key
         return TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
-
+    
     original_get_obs = env.get_observations
     original_step = env.step
-
     env.get_observations = lambda: ensure_tensordict(original_get_obs())
     
     def patched_step(actions):
@@ -203,15 +125,13 @@ def main():
     
     env.step = patched_step
    
-
-    # load previously trained model
+    ### (3) POLICY LOADING AND EXPORTING ###
     ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
-    ########## NEW RSL_RL STATE BASED RL ##########
     obs_normalizer = getattr(ppo_runner.alg, "obs_normalizer", None)
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
     os.makedirs(export_model_dir, exist_ok=True)
@@ -222,65 +142,51 @@ def main():
         print(f"[INFO] Policy exported successfully to: {export_model_dir}")
     except Exception as e:
         print(f"[WARNING] Error during export (playback will continue): {e}")
-    ##############################################
-
-    obs = env.get_observations() 
-    timestep = 0
-
+    
+    ### (4) SCENE ASSET REFERENCES ###
     base_env = getattr(env, "unwrapped", env)
     robot_asset = base_env.scene["robot"]
     ee_frame = base_env.scene["ee_frame"]
+    camera_sensor = base_env.scene.sensors["camera"]
+    
+    ### (5) USER-TUNABLE FLAGS AND VARIABLES ###
+    # liver stabilization warm-up (number of steps to run with zero actions to let the liver settle before starting policy inference)
+    STABILIZATION_STEPS = 20 
 
-    # ===== REF FRAME VISUALIZATION TOGGLE =====
-    # Set to True/False, or comment/decomment this section as you prefer.
+    # reference frame visualization (markers) variables
     SHOW_REF_FRAMES = False
     camera_frame_marker = None
     robot_root_frame_marker = None
     target_frame_marker = None
     target_point_marker = None
     ee_marker = None
-    # ===== END VISUALIZATION (COMMENT/DECOMMENT) =====
-    
-    # Save camera reference for later mask saving
-    try:
-        camera_sensor = base_env.scene.sensors["camera"]
-    except Exception as e:
-        print(f"[WARNING] Could not get camera sensor: {e}")
-        camera_sensor = None
-    # # PRINT ACTUATOR CONFIG FOR DEBUGGING
-    # drive_props = getattr(robot_asset, "drive_properties", None)
-    # act_cfg = getattr(robot_asset, "cfg", None)
-    # actuators = getattr(act_cfg, "actuators", None) if act_cfg is not None else None
-    # for name, cfg in actuators.items():
-    #     stiff = getattr(cfg, "stiffness", None)
-    #     damp = getattr(cfg, "damping", None)
-    #     print(f"  {name}: stiffness={stiff}, damping={damp}")
 
-    # ROBOT_IP = "127.0.0.1" # localhost
-    # ROBOT_IP = "10.168.129.217"
-    # ROBOT_IP = "10.41.197.104"
-    # ROBOT_IP = "10.41.50.246" # new arm computer
-    ROBOT_IP = "10.41.53.28"
-    ROBOT_PORT = 5005
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-   
+    # action filtering 
+    USE_ACTION_FILTER = False
+    action_filter_alpha = 0.1
+    filtered_actions = None
+
+    # data saving
+    SAVE_DATA = False
+    SAVE_MASK = False  
+    timestep_data_list = []
+    if SAVE_DATA:
+        print(f"[INFO] Data saving enabled. Data will be saved as Excel file at episode end.")
+    if SAVE_MASK:
+        print(f"[INFO] Mask saving enabled. Binary mask and final frame will be saved at episode end.")
     
+    ### (6) VARIABLE INITIALIZATION ###
+    obs = env.get_observations() 
+    timestep = 0
     joint_names = [
         "Yaw", "Pitch", "Insertion", "Wrist Roll", "Wrist Pitch", "Wrist Yaw"
     ]
-    prev_pos = None
-    last_step_time = time.perf_counter()
-    last_pos_after = None
+    joint_names_obs = [
+        "Yaw", "Pitch", "Insert", "Wrist_Roll", "Wrist_Pitch", "Wrist_Yaw", "Gripper1", "Gripper2"
+    ]
     
-    # Buffer for Insertion MAE calculation (last 100 steps)
-    insertion_real_moves = []  # real_move for Insertion joint (index 2)
-    insertion_processed = []   # processed_actions for Insertion joint (index 2)
     
-    # Data logging for Excel export
-    episode_data = []  # List to accumulate data for current episode
-    observation_data = []
-    
-    # Print initial robot state (STEP 0)
+    ### (7) INITIAL STATE PRINT ###
     print("\n" + "="*80)
     print(f"INITIAL STATE (STEP 0 - RESET)")
     print("="*80)
@@ -303,15 +209,9 @@ def main():
     e_quat_b = ee_quat_b[0].cpu().numpy()
     print(f"\nEE frame (robot RF): X={e_pos_b[0]:.5f}, Y={e_pos_b[1]:.5f}, Z={e_pos_b[2]:.5f}, w={e_quat_b[0]:.5f}, x={e_quat_b[1]:.5f}, y={e_quat_b[2]:.5f}, z={e_quat_b[3]:.5f}")
     print("="*80 + "\\n")
-    
-    # ========== LIVER STABILIZATION WARM-UP ==========
-    # Number of steps to run with zero actions before the policy starts
-    STABILIZATION_STEPS = 20  # Adjust as needed (10-30 steps is usually enough)
-    # =========================================
 
-    # ========== LIVER STABILIZATION WARM-UP ==========
+    ### (8) LIVER STABILIZATION WARM-UP ###
     print(f"\n[INFO] Running {STABILIZATION_STEPS} stabilization steps (zero actions) to let liver settle...")
-    # Get correct action dimension from the environment
     action_dim = base_env.action_manager.total_action_dim
     zero_actions = torch.zeros(env.num_envs, action_dim, device=agent_cfg.device)
     with torch.inference_mode():
@@ -320,79 +220,26 @@ def main():
             if stab_step % 5 == 0:
                 print(f"  [STABILIZE] step {stab_step+1}/{STABILIZATION_STEPS}")
     print("[INFO] Stabilization complete. Starting policy inference.\n")
-    # ==================================================
-    
-    # ========== ACTION FILTERING SETUP ==========
-    USE_ACTION_FILTER = True
-    action_filter_alpha = 0.1
-    filtered_actions = None
-    # ==========================================
-    
-    # ========== DATA SAVING SETUP ==========
-    SAVE_DATA = False
-    SAVE_MASK = True  # Save binary mask and final frame when episode ends
-    timestep_data_list = []  # Collect data for each timestep
-    if SAVE_DATA:
-        print(f"[INFO] Data saving enabled. Data will be saved as Excel file at episode end.")
-    if SAVE_MASK:
-        print(f"[INFO] Mask saving enabled. Binary mask and final frame will be saved at episode end.")
-    # ========================================
-    
+
+    ###### MAIN SIMULATION LOOP - INFERENCE ######
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
             print("\n" + "="*80)
             print(f"STEP {timestep:04d}")
             print("="*80)
             
-            # STEP 1: Capture state BEFORE action execution (s_t, pos_t)
+            ### (9) CAPTURE STATE BEFORE ACTION ###
             obs_before = obs  # Observation at current timestep (s_t)
             pos_before = robot_asset.data.joint_pos[0][:6].cpu().numpy()  # Position at current timestep
-            true_pos = robot_asset.data.joint_pos[0].cpu().numpy() # obs file
-            true_vel = robot_asset.data.joint_vel[0].cpu().numpy() # obs file
+            true_pos = robot_asset.data.joint_pos[0].cpu().numpy() 
+            true_vel = robot_asset.data.joint_vel[0].cpu().numpy()
             
-            # ===== OVERRIDE OBSERVATIONS BEFORE POLICY INFERENCE (if enabled) =====
-            if OVERRIDE_OBSERVATIONS_FROM_EXCEL and override_obs_data is not None and override_column_indices is not None:
-                if timestep < len(override_obs_data):
-                    try:
-                        # Extract observations from TensorDict
-                        if isinstance(obs_before, dict):
-                            obs_data = obs_before.get("policy", obs_before)
-                        elif hasattr(obs_before, 'get'):
-                            obs_data = obs_before.get("policy", obs_before)
-                        else:
-                            obs_data = obs_before
-                        
-                        # Convert to numpy for modification
-                        if torch.is_tensor(obs_data):
-                            obs_np = obs_data[0].cpu().numpy().copy() if obs_data.dim() > 1 else obs_data.cpu().numpy().copy()
-                        else:
-                            obs_np = np.array(obs_data)
-                        
-                        # Override first 6 joint positions with values from Excel
-                        row = override_obs_data.iloc[timestep]
-                        joint_pos_override = np.array([row[col] for col in override_column_indices])
-                        obs_np[:6] = joint_pos_override
-                        
-                        # Reconstruct obs_before as TensorDict with modified observations
-                        obs_tensor = torch.from_numpy(obs_np).float().to(device=agent_cfg.device).unsqueeze(0)
-                        from tensordict import TensorDict
-                        obs_before = TensorDict({"policy": obs_tensor}, batch_size=env.num_envs)
-                        
-                        if timestep == 0:
-                            print(f"[OVERRIDE] Step {timestep}: Observations overridden with Excel data BEFORE policy inference")
-                    except Exception as e:
-                        print(f"[WARNING] Override failed at step {timestep}: {e}")
-            # ======================================================================
             
-            # STEP 2: Get action from policy based on current observation
+            ### (10) GET ACTION FROM POLICY BASED ON CURRENT OBSERVATION ###
             actions = policy(obs_before)
             raw_policy = actions[0].cpu().numpy()
-            
-            # # Keep robot still - override actions with zeros
-            # actions = torch.zeros_like(actions)
 
-            # Apply filter or use raw actions based on USE_ACTION_FILTER flag
+            ### (11) APPLY FILTER OR USE RAW ACTIONS BASED ON FLAG ###
             # ---------> filtered action = alpha * raw_action + (1 - alpha) * previous_filtered_action
             if USE_ACTION_FILTER:
                 if filtered_actions is None:
@@ -407,12 +254,11 @@ def main():
                 actions_to_use = actions
                 raw_val = actions[0, 2].cpu().item()
                 print(f"[NO FILTER] Joint 2 (Insertion): RAW={raw_val:+.4f} → USED AS-IS={raw_val:+.4f}")
-            ############################
 
-            # STEP 3: Execute action and get next state (s_{t+1})
+            ### (12) EXECUTE ACTION IN ENVIRONMENT AND GET NEW STATE (SIMULATION STEP) ###
             obs, rewards, dones, extras = env.step(actions_to_use) 
 
-            # Get camera sensor and compute gallbladder visibility
+            ### (13) EXTRACT AND PRINT REWARD COMPONENTS AND SUCCESS METRICS ###
             try:
                 camera = env.unwrapped.scene.sensors["camera"]
                 if camera is not None:
@@ -478,7 +324,7 @@ def main():
             noisy_pos = obs_flat[:8] # obs file
             noisy_vel = obs_flat[8:16] # obs file
             obs_row = {'step': timestep} # obs file
-            joint_names_obs = ["Yaw", "Pitch", "Insert", "Wrist_Roll", "Wrist_Pitch", "Wrist_Yaw", "Gripper1", "Gripper2"]
+            
             for j in range(8): # obs file
                 name = joint_names_obs[j] if j < len(joint_names_obs) else f"joint_{j}" # obs file
                 obs_row[f'true_pos_{name}'] = true_pos[j] # obs file
@@ -511,39 +357,9 @@ def main():
             cmd_term = base_env.action_manager.get_term("arm_action")
             processed_actions = cmd_term.processed_actions[0].cpu().numpy()
 
-            # data = struct.pack('6f', *processed_actions)
-            # sock.sendto(data, (ROBOT_IP, ROBOT_PORT))
-
             pos_after = robot_asset.data.joint_pos[0][:6].cpu().numpy()
             real_move = pos_after - pos_before
 
-            if not done_flag:
-                last_pos_after = pos_after.copy()
-                # Send UDP only if not done
-                # data = struct.pack('6f', *real_move)
-                target_jp = processed_actions[:6] 
-                actions_raw_np = actions[0, :6].cpu().numpy()
-                data = struct.pack('6f', *actions_raw_np)
-                sock.sendto(data, (ROBOT_IP, ROBOT_PORT))
-                sock.settimeout(0.5)  # Set timeout for receiving response
-                # try:
-                #     ack, _ = sock.recvfrom(1024)  # Wait for acknowledgment from robot
-                # except socket.timeout:
-                #     print(f"[WARNING] No acknowledgment received from robot at {ROBOT_IP}:{ROBOT_PORT} within timeout.")
-                
-                # Track Insertion joint (index 2) for MAE calculation
-                insertion_real_moves.append(real_move[2])
-                insertion_processed.append(processed_actions[2])
-                
-                # Keep only last 100 steps
-                if len(insertion_real_moves) > 100:
-                    insertion_real_moves.pop(0)
-                    insertion_processed.pop(0)
-                
-                # Every 100 steps, print MAE
-                if timestep > 0 and timestep % 100 == 0:
-                    mae = np.mean(np.abs(np.array(insertion_real_moves) - np.array(insertion_processed)))
-                    print(f"[MAE] Insertion (last 100 steps): {mae:.6f}")
             
             # target pose wrt robot root frame
             robot_root_pos = robot_asset.data.root_state_w[:, :3]
@@ -687,23 +503,6 @@ def main():
             joint_pos_obs = obs_flat[:8] if obs_size >= 8 else obs_flat[:obs_size]
             joint_vel_obs = obs_flat[8:16] if obs_size >= 16 else obs_flat[8:obs_size]
             
-            # ===== OVERRIDE JOINT_POS_OBS FROM EXCEL IF AVAILABLE =====
-            if override_obs_data is not None and override_column_indices is not None:
-                if timestep < len(override_obs_data):
-                    try:
-                        row = override_obs_data.iloc[timestep]
-                        # Extract the 6 joint positions using the identified columns
-                        joint_pos_obs_override = np.array([row[col] for col in override_column_indices])
-                        # Keep gripper values (if they exist) from original obs
-                        joint_pos_obs_new = np.concatenate([joint_pos_obs_override, joint_pos_obs[6:]])
-                        joint_pos_obs = joint_pos_obs_new
-                        print(f"[OVERRIDE] Step {timestep}: joint_pos overridden from Excel")
-                    except Exception as e:
-                        print(f"[WARNING] Override failed at step {timestep}: {e}")
-                else:
-                    if timestep == 0:
-                        print(f"[DEBUG] File has {len(override_obs_data)} rows, cannot override step {timestep}")
-            # ============================================================
             
             # target_pose: last 13 = target_pose(7) + actions(6)
             target_pose_start = obs_size - 13 if obs_size >= 13 else -1
@@ -723,34 +522,6 @@ def main():
             # ===============================
             
 
-            # # Collect data for Excel export (only arm joints 0-5, not gripper)
-            # row_data = {
-            #     'step': timestep,
-            # }
-            # # obs_joint_pos (only first 6: arm)
-            # for j in range(6):
-            #     row_data[f'obs_joint_pos_j{j}'] = joint_pos_obs[j]
-            # # obs_joint_vel (only first 6: arm)
-            # for j in range(6):
-            #     row_data[f'obs_joint_vel_j{j}'] = joint_vel_obs[j]
-            # # obs_last_action
-            # for j in range(6):
-            #     row_data[f'obs_last_action_j{j}'] = actions_obs[j] if j < len(actions_obs) else 0.0
-            # # raw_policy
-            # for j in range(6):
-            #     row_data[f'raw_policy_j{j}'] = raw_policy[j]
-            # # processed_actions
-            # for j in range(6):
-            #     row_data[f'processed_action_j{j}'] = processed_actions[j]
-            # # real_move
-            # for j in range(6):
-            #     row_data[f'real_move_j{j}'] = real_move[j]
-            # # position (current)
-            # for j in range(6):
-            #     row_data[f'position_j{j}'] = pos_after[j]
-            
-            # episode_data.append(row_data)
-            
             
             header = f"{'JOINT':<10} | {'POSITION':>10} | {'RAW POLICY':>10} | {'PROCESSED':>10} | {'REAL MOVE':>10}"
             print(header)
@@ -829,9 +600,7 @@ def main():
             
             # ===== SAVE BINARY MASK AND FINAL FRAME AT EPISODE END =====
             if SAVE_MASK:
-                try:
-                    from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import gallbladder_mask_tensor
-                    
+                try:                    
                     if camera_sensor is not None and hasattr(camera_sensor, "data") and hasattr(camera_sensor.data, "output"):
                         # Get RGB data from camera (fresh data at final step)
                         camera_output = camera_sensor.data.output
@@ -885,10 +654,6 @@ def main():
                     print(f"[WARNING] Could not save mask/frame at step {timestep}: {type(e).__name__}: {e}")
             # ===== END MASK/FRAME SAVE =====
             
-            # # Print MAE for Insertion if episode ended before 100 steps
-            # if len(insertion_real_moves) > 0:
-            #     mae = np.mean(np.abs(np.array(insertion_real_moves) - np.array(insertion_processed)))
-            #     print(f"[MAE] Insertion (episode total, {len(insertion_real_moves)} steps): {mae:.6f}")
             
             # Save timestep data to Excel if enabled
             if SAVE_DATA and timestep_data_list:
@@ -920,11 +685,6 @@ def main():
                 print(f"[WARN] Unable to stop robot: {e}")
             print("[INFO] Stopping simulation.")
             
-            # Reset buffers for next episode
-            insertion_real_moves = []
-            insertion_processed = []
-            episode_data = []  # Reset data for next episode
-            observation_data = [] # obs file
             timestep_data_list = []  # Reset timestep data for next episode
             # timestep = 0
             break
