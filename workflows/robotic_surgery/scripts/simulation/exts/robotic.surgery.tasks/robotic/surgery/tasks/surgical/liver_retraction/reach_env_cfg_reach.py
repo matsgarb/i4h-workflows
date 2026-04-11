@@ -101,13 +101,13 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
         
-        # ===== OPTION 1: STATE BASED RL =====
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        actions = ObsTerm(func=mdp.last_action)
-        def __post_init__(self):
-            self.enable_corruption = True
-            self.concatenate_terms = True
+        # # ===== OPTION 1: STATE BASED RL =====
+        # joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        # joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        # actions = ObsTerm(func=mdp.last_action)
+        # def __post_init__(self):
+        #     self.enable_corruption = True
+        #     self.concatenate_terms = True
         
         # # ===== OPTION 2: IMAGE BASED RL - SINGLE FRAME (OLD) =====
         # camera_rgb = ObsTerm(func=mdp.camera_rgb_observation)
@@ -115,11 +115,11 @@ class ObservationsCfg:
         #     self.enable_corruption = False
         #     self.concatenate_terms = True
 
-        # # ===== OPTION 3: IMAGE BASED RL - FRAME STACKING (NEW) =====
-        # camera_rgbd = ObsTerm(func=mdp.camera_rgb_frame_stack_observation)
-        # def __post_init__(self):
-        #     self.enable_corruption = False
-        #     self.concatenate_terms = True
+        # ===== OPTION 3: IMAGE BASED RL - FRAME STACKING (NEW) =====
+        camera_rgbd = ObsTerm(func=mdp.camera_rgb_frame_stack_observation)
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
         
         # # ===== OPTION 4: HYBRID RL - IMAGE + STATE (CURRENT) =====
         # camera_rgb = ObsTerm(func=mdp.camera_rgb_observation)
@@ -206,9 +206,9 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        # STATE BASED
-        self.episode_length_s = 12
-        # # IMAGE BASED
-        # self.episode_length_s = 15
+        # # STATE BASED
+        # self.episode_length_s = 12
+        # IMAGE BASED
+        self.episode_length_s = 15
         # simulation settings
         self.sim.dt = 1.0 / 80.0
