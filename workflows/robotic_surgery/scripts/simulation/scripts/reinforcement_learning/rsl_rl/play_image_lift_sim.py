@@ -63,9 +63,6 @@ from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import (
     gallbladder_visibility_success,
     gallbladder_mask_tensor,
 )
-from isaaclab.markers import VisualizationMarkers
-from isaaclab.markers.config import FRAME_MARKER_CFG
-
 
 def main():
 
@@ -101,8 +98,7 @@ def main():
     env = RslRlVecEnvWrapper(env)
 
     ### (2) TENSORDICT COMPATIBILITY PATCH ###
-    # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key.
-    # For image-based RL, we also:
+    # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key
     #   - permute image tensors from (B, H, W, C) → (B, C, H, W) and normalize to [0, 1]
     #   - inject a "dummy_state" key of shape (B, 0) required by some RSL-RL actor configs
 

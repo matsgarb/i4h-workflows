@@ -125,34 +125,3 @@ def camera_rgb_frame_stack_observation(env: ManagerBasedRLEnv) -> torch.Tensor:
     
     return stacked_rgb.contiguous()  # [batch, 12, 168, 168]
 
-
-# ===== ALTERNATIVE COMMENTED VERSIONS (BACKUP) =====
-
-# # Attempt with camera history (not available in IsaacLab)
-# def camera_rgb_stack_observation_with_history(env: ManagerBasedRLEnv) -> torch.Tensor:
-#    """Attempt to use camera history (commented out)."""
-#    camera = env.scene.sensors["camera"]
-#    camera.update(dt=env.physics_dt, force_recompute=True)
-#    rgb_now = camera.data.output["rgb"][..., :3].float() / 255.0
-#
-#    history_rgb = None
-#    if hasattr(camera.data, "history") and "rgb" in camera.data.history:
-#       history_rgb = camera.data.history["rgb"]
-#    elif hasattr(camera.data, "output_history"):
-#       history_rgb = camera.data.output_history["rgb"]
-#
-#    if history_rgb is None:
-#       print("[WARNING] No history found for camera rgb data.")
-#       stacked_rgb = torch.cat([rgb_now] * 4, dim=-1)
-#    elif len(history_rgb) >= 3:
-#       f1 = history_rgb[-1][..., :3].float() / 255.0 
-#       f2 = history_rgb[-2][..., :3].float() / 255.0
-#       f3 = history_rgb[-3][..., :3].float() / 255.0 
-#       stacked_rgb = torch.cat([rgb_now, f1, f2, f3], dim=-1)
-#    else:
-#       stacked_rgb = torch.cat([rgb_now] * 4, dim=-1)
-#    
-#    rgb_out = stacked_rgb.permute(0, 3, 1, 2)
-#    if rgb_out.shape[-2:] != (84, 84):
-#       rgb_out = F.interpolate(rgb_out, size=(84, 84), mode='bilinear', align_corners=False)
-#    return rgb_out.contiguous()
