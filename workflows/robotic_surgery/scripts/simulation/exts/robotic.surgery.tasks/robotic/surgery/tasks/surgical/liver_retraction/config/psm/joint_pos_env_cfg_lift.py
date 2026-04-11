@@ -10,7 +10,7 @@ from isaaclab.sensors import FrameTransformerCfg, CameraCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.assets import DeformableObjectCfg
-from robotic.surgery.tasks.surgical.liver_retraction.lift_env_cfg_reach import LiftEnvCfg
+from robotic.surgery.tasks.surgical.liver_retraction.reach_env_cfg_lift import LiftEnvCfg
 from simulation.utils.assets import robotic_surgery_assets
 from isaaclab.sim.schemas.schemas_cfg import DeformableBodyPropertiesCfg
 from isaaclab.sim.spawners.materials import DeformableBodyMaterialCfg, PreviewSurfaceCfg
