@@ -117,24 +117,8 @@ class PSMLiftEnvCfg(LiftEnvCfg):
         # ===================== ACTIONS OVERRIDE =====================
         # ============================================================
         # # override actions
-        # STATE BASED
-        self.actions.arm_action = mdp.JointPositionActionCfg(
-            asset_name="robot",
-            joint_names=[
-                "psm_yaw_joint",
-                "psm_pitch_end_joint",
-                "psm_main_insertion_joint",
-                "psm_tool_roll_joint",
-                "psm_tool_pitch_joint",
-                "psm_tool_yaw_joint",
-            ],
-            scale = 0.02,
-            use_default_offset=True,
-        )
-        
-        
-        # # IMAGE BASED
-        # self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
+        # # STATE BASED
+        # self.actions.arm_action = mdp.JointPositionActionCfg(
         #     asset_name="robot",
         #     joint_names=[
         #         "psm_yaw_joint",
@@ -144,9 +128,25 @@ class PSMLiftEnvCfg(LiftEnvCfg):
         #         "psm_tool_pitch_joint",
         #         "psm_tool_yaw_joint",
         #     ],
-        #     scale = 0.001,
-        #     use_zero_offset=True,
+        #     scale = 0.02,
+        #     use_default_offset=True,
         # )
+        
+        
+        # IMAGE BASED
+        self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=[
+                "psm_yaw_joint",
+                "psm_pitch_end_joint",
+                "psm_main_insertion_joint",
+                "psm_tool_roll_joint",
+                "psm_tool_pitch_joint",
+                "psm_tool_yaw_joint",
+            ],
+            scale = 0.001,
+            use_zero_offset=True,
+        )
 
         # =============================================================
         # ===================== EVENTS MANAGEMENT =====================
@@ -161,7 +161,6 @@ class PSMLiftEnvCfg(LiftEnvCfg):
             mode="reset",
             params={
                 # per-joint ranges: [yaw, pitch, insertion, roll, pitch, yaw, gripper 1, gripper 2]
-                # (-0.2, 0.2) for reach STATE based, (-0.1, 0.1) for reach IMAGE based,  (0, 0) for lift
                 "position_ranges": [
                     (-0.0, -0.0),  # yaw
                     (0.0, 0.0),  # pitch

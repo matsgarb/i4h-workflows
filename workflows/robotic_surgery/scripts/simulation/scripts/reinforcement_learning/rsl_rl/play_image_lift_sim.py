@@ -6,7 +6,7 @@
 """Script to play a checkpoint of an RL agent from RSL-RL.
    IMAGE-BASED version for the LIFT task.
    Success criteria: gallbladder visible pixels > GALLBLADDER_PIXEL_THRESHOLD.
-   Action filtering enabled (EMA).
+   Action filtering enabled (EMA). No dist/orient error monitoring.
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -28,7 +28,7 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+args_cli = parser.parse_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -41,21 +41,14 @@ simulation_app = app_launcher.app
 # All imports AFTER Isaac Sim is launched (Isaac Sim must init first)
 # -----------------------------------------------------------------------
 import os
-import cv2
 import numpy as np
 import gymnasium as gym
 import robotic.surgery.tasks  # noqa: F401
 import torch
-import pandas as pd
-from tensordict import TensorDict
+import cv2
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.dict import print_dict
-from isaaclab_rl.rsl_rl import (
-    RslRlOnPolicyRunnerCfg,
-    RslRlVecEnvWrapper,
-    export_policy_as_jit,
-    export_policy_as_onnx,
-)
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 from rsl_rl.runners import OnPolicyRunner
 from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import (
@@ -63,6 +56,9 @@ from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import (
     gallbladder_visibility_success,
     gallbladder_mask_tensor,
 )
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers.config import FRAME_MARKER_CFG
+
 
 def main():
 
@@ -74,7 +70,8 @@ def main():
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
-    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
@@ -98,14 +95,14 @@ def main():
     env = RslRlVecEnvWrapper(env)
 
     ### (2) TENSORDICT COMPATIBILITY PATCH ###
-    # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key
-    #   - permute image tensors from (B, H, W, C) → (B, C, H, W) and normalize to [0, 1]
-    #   - inject a "dummy_state" key of shape (B, 0) required by some RSL-RL actor configs
+    # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key.
+    # For image-based RL:
+    #   - permute image tensors from (B, H, W, C) -> (B, C, H, W) and normalize to [0, 1]
+    #   - inject "dummy_state" key of shape (B, 0) required by some RSL-RL actor configs
+
+    from tensordict import TensorDict
 
     def ensure_tensordict(data):
-        """Convert any observation format to TensorDict with 'policy' key.
-        Handles image tensors: permutes (B,H,W,C) → (B,C,H,W) and normalizes to [0,1].
-        """
         obs = data[0] if isinstance(data, tuple) else data
         if isinstance(obs, TensorDict):
             td = obs.to(agent_cfg.device)
@@ -114,7 +111,7 @@ def main():
         else:
             td = TensorDict({"policy": obs.to(agent_cfg.device)}, batch_size=env.num_envs)
 
-        # normalize image tensors: (B, H, W, C) → (B, C, H, W), [0,255] → [0,1]
+        # normalize image tensors: (B, H, W, C) -> (B, C, H, W), [0,255] -> [0,1]
         for key in list(td.keys()):
             if len(td[key].shape) == 4 and td[key].shape[-1] in [3, 4]:
                 td[key] = td[key].permute(0, 3, 1, 2).float() / 255.0
@@ -157,11 +154,10 @@ def main():
         print(f"[WARNING] Error during export (playback will continue): {e}")
 
     ### (4) SCENE ASSET REFERENCES ###
-    # Grab handles to the robot, EE frame, and camera sensor from the unwrapped env scene.
+    # Grab handles to the robot and camera sensor from the unwrapped env scene.
 
-    base_env = getattr(env, "unwrapped", env)
-    robot_asset  = base_env.scene["robot"]
-    ee_frame     = base_env.scene["ee_frame"]
+    base_env      = getattr(env, "unwrapped", env)
+    robot_asset   = base_env.scene["robot"]
     camera_sensor = base_env.scene.sensors["camera"]
 
     ### (5) USER-TUNABLE FLAGS AND VARIABLES ###
@@ -169,14 +165,7 @@ def main():
     # liver stabilization warm-up: number of steps with zero actions before inference starts
     STABILIZATION_STEPS = 20
 
-
-    # action filtering: enabled for lift task to smooth commands
-    # EMA formula: filtered = alpha * raw + (1 - alpha) * prev_filtered
-    USE_ACTION_FILTER   = True
-    action_filter_alpha = 0.1   # higher = more responsive, lower = smoother
-    filtered_actions    = None
-
-    # observation frame saving (saves the image observation fed to the policy at each step)
+    # observation frame saving (saves the exact camera image fed to the policy at each step)
     SAVE_OBS_FRAMES = False
     obs_frames_dir  = None
     if SAVE_OBS_FRAMES:
@@ -184,14 +173,20 @@ def main():
         os.makedirs(obs_frames_dir, exist_ok=True)
         print(f"[INFO] Observation frames will be saved to: {obs_frames_dir}")
 
-    # data saving: saves per-timestep joint data + gallbladder pixels to Excel at episode end
-    SAVE_DATA          = False
-    timestep_data_list = []
-    if SAVE_DATA:
-        print(f"[INFO] Data saving enabled. Data will be saved as Excel file at episode end.")
+    # reference frame visualization toggle (robot root, EE, camera frames)
+    SHOW_REF_FRAMES         = False
+    camera_frame_marker     = None
+    robot_root_frame_marker = None
+    ee_marker               = None
+
+    # action filtering: enabled for lift task to smooth commands
+    # EMA formula: filtered = alpha * raw + (1 - alpha) * prev_filtered
+    USE_ACTION_FILTER   = True
+    action_filter_alpha = 0.1  # higher = more responsive, lower = smoother
+    filtered_actions    = None
 
     # mask saving: saves binary gallbladder mask + final RGB frame at episode end
-    SAVE_MASK = False
+    SAVE_MASK = True
     if SAVE_MASK:
         print(f"[INFO] Mask saving enabled. Binary mask and final frame will be saved at episode end.")
 
@@ -203,14 +198,13 @@ def main():
     obs      = env.get_observations()
     timestep = 0
 
-    joint_names     = ["Yaw", "Pitch", "Insertion", "Wrist Roll", "Wrist Pitch", "Wrist Yaw"]
-    joint_names_obs = ["Yaw", "Pitch", "Insert", "Wrist_Roll", "Wrist_Pitch", "Wrist_Yaw", "Gripper1", "Gripper2"]
+    joint_names = ["Yaw", "Pitch", "Insertion", "Wrist Roll", "Wrist Pitch", "Wrist Yaw"]
 
-    observation_data = []  # per-step obs data for optional Excel export
-
-    # "last good" value: updated every non-terminal step so the final summary
-    # always shows pre-reset values rather than the reset state
+    # "last good" pixel count: updated every non-terminal step for the final summary
     last_visible_pixels = 0
+
+    # for the final summary, tracked at outer scope
+    episode_reason = "UNKNOWN"
 
     ### (7) INITIAL STATE PRINT ###
     # Print joint positions and velocities before any action.
@@ -254,12 +248,9 @@ def main():
 
             obs_before = obs
             pos_before = robot_asset.data.joint_pos[0][:6].cpu().numpy()
-            true_pos   = robot_asset.data.joint_pos[0].cpu().numpy()
-            true_vel   = robot_asset.data.joint_vel[0].cpu().numpy()
 
             ### (10) OPTIONAL: SAVE OBSERVATION FRAME TO DISK ###
-            # Saves the exact camera_rgb_observation used during training
-            # (resized to 168x168, normalized to [0,1]) as a PNG file.
+            # Saves the exact camera image used during training (168x168, [0,1]) as a PNG.
 
             if SAVE_OBS_FRAMES:
                 try:
@@ -300,31 +291,7 @@ def main():
 
             obs, rewards, dones, extras = env.step(actions_to_use)
 
-            ### (14) EXTRACT FLAT OBSERVATION ARRAY FOR LOGGING ###
-            # obs_before is the TensorDict from the previous step.
-            # We extract the "policy" key which holds the image tensor.
-            # obs_flat is used only for the joint-level logging section.
-
-            obs_data = obs_before.get("policy") if isinstance(obs_before, dict) or hasattr(obs_before, 'get') else obs_before
-            if torch.is_tensor(obs_data):
-                obs_flat = obs_data[0].cpu().numpy() if obs_data.dim() > 1 else obs_data.cpu().numpy()
-            else:
-                obs_flat = np.array(obs_data)
-
-            noisy_pos = obs_flat[:8]
-            noisy_vel = obs_flat[8:16]
-            obs_row   = {'step': timestep}
-            for j in range(8):
-                name = joint_names_obs[j] if j < len(joint_names_obs) else f"joint_{j}"
-                obs_row[f'true_pos_{name}']  = true_pos[j]
-                obs_row[f'noisy_pos_{name}'] = noisy_pos[j]
-                obs_row[f'pos_error_{name}'] = true_pos[j] - noisy_pos[j]
-                obs_row[f'true_vel_{name}']  = true_vel[j]
-                obs_row[f'noisy_vel_{name}'] = noisy_vel[j]
-                obs_row[f'vel_error_{name}'] = true_vel[j] - noisy_vel[j]
-            observation_data.append(obs_row)
-
-            ### (15) DONE FLAG CHECK ###
+            ### (14) DONE FLAG CHECK ###
 
             done_flag = False
             if torch.is_tensor(dones):
@@ -334,16 +301,16 @@ def main():
             elif isinstance(dones, bool):
                 done_flag = dones
 
-            ### (16) ACTION LOGGING ###
+            ### (15) ACTION LOGGING ###
 
             cmd_term          = base_env.action_manager.get_term("arm_action")
             processed_actions = cmd_term.processed_actions[0].cpu().numpy()
             pos_after         = robot_asset.data.joint_pos[0][:6].cpu().numpy()
             real_move         = pos_after - pos_before
 
-            ### (17) GALLBLADDER EXPOSURE MONITORING (replaces dist/orient error) ###
-            # Every non-terminal step: read RGB from camera, count visible gallbladder pixels,
-            # check success condition, print result.
+            ### (16) GALLBLADDER EXPOSURE MONITORING (every non-terminal step) ###
+            # Read RGB from camera, count visible gallbladder pixels, check success condition.
+            # This replaces the dist/orient error monitoring used in the reach task.
 
             if not done_flag:
                 visible_pixels = 0
@@ -371,7 +338,7 @@ def main():
                     if timestep == 0:
                         print(f"[DEBUG] Camera error: {e}")
 
-                # store for final summary
+                # store for final summary (overwritten every non-terminal step)
                 last_visible_pixels = visible_pixels
 
                 success_text = "✓ SUCCESS" if success_bool else "✗ NO SUCCESS"
@@ -385,18 +352,47 @@ def main():
                     print(f"Visible pixels: {visible_pixels} (threshold: > {GALLBLADDER_PIXEL_THRESHOLD})")
                     print("=" * 80 + "\n")
 
+                ### (17) REFERENCE FRAME VISUALIZATION (optional) ###
+                if SHOW_REF_FRAMES:
+                    try:
+                        robot_root_pos  = robot_asset.data.root_state_w[:, :3]
+                        robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
+                        ee_frame        = base_env.scene["ee_frame"]
+                        ee_pos_w        = ee_frame.data.target_pos_w[..., 0, :]
+                        ee_quat_w       = ee_frame.data.target_quat_w[..., 0, :]
+                        num_envs        = robot_root_pos.shape[0]
+                        marker_indices  = torch.zeros(num_envs, dtype=torch.int32, device=base_env.device)
 
-                ### (19) PRINT OBSERVATIONS AND ACTION TABLE ###
+                        if robot_root_frame_marker is None:
+                            robot_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/RobotRootFrame_Play")
+                            robot_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            robot_root_frame_marker = VisualizationMarkers(robot_cfg)
 
-                obs_size      = len(obs_flat)
-                joint_pos_obs = obs_flat[:8]
-                joint_vel_obs = obs_flat[8:16]
-                actions_obs   = obs_flat[16:22]
+                        if camera_frame_marker is None:
+                            cam_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CameraFrame_Play")
+                            cam_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            camera_frame_marker = VisualizationMarkers(cam_cfg)
 
-                print(f"\nOBSERVATIONS (size={obs_size}):")
-                print(f"  joint_pos_rel (8):  {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
-                print(f"  joint_vel_rel (8):  {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
-                print(f"  last_action (6):    {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
+                        if ee_marker is None:
+                            ee_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame_Play")
+                            ee_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            ee_marker = VisualizationMarkers(ee_marker_cfg)
+
+                        robot_root_frame_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
+                        ee_marker.visualize(ee_pos_w, ee_quat_w, marker_indices=marker_indices)
+
+                        if hasattr(camera_sensor.data, "pos_w"):
+                            cam_pos_w = camera_sensor.data.pos_w
+                            if hasattr(camera_sensor.data, "quat_w"):
+                                cam_quat_w_vis = camera_sensor.data.quat_w
+                            else:
+                                cam_quat_w_vis = torch.zeros((num_envs, 4), device=base_env.device, dtype=cam_pos_w.dtype)
+                                cam_quat_w_vis[:, 0] = 1.0
+                            camera_frame_marker.visualize(cam_pos_w, cam_quat_w_vis, marker_indices=marker_indices)
+                    except Exception as e:
+                        print(f"[DEBUG] ref-frame visualization error: {e}")
+
+                ### (18) PRINT JOINT TABLE ###
 
                 header = f"{'JOINT':<10} | {'POSITION':>10} | {'RAW POLICY':>10} | {'PROCESSED':>10} | {'REAL MOVE':>10}"
                 if USE_ACTION_FILTER:
@@ -414,26 +410,10 @@ def main():
                         row += f" | {fv:>10.5f}"
                     print(row)
                 print("=" * len(header))
-                print("="*80 + "\n")
 
-                ### (20) SAVE TIMESTEP DATA ###
-                if SAVE_DATA:
-                    row_data = {'timestep': timestep}
-                    for j in range(6):
-                        row_data[f'position_j{j}']          = pos_after[j]
-                        row_data[f'raw_policy_j{j}']        = raw_policy[j]
-                        row_data[f'processed_actions_j{j}'] = processed_actions[j]
-                        row_data[f'real_movement_j{j}']     = real_move[j]
-                    row_data['visible_pixels'] = visible_pixels
-                    row_data['success']        = int(success_bool)
-                    timestep_data_list.append(row_data)
+            print("="*80 + "\n")
 
-        ### (21) SNAPSHOT OF FINAL METRICS BEFORE TERMINATION CHECK ###
-        final_visible_pixels = last_visible_pixels
-        final_timestep       = timestep
-        final_episode_reason = "UNKNOWN"
-
-        ### (22) EPISODE TERMINATION CHECK AND LOGGING ###
+        ### (19) EPISODE TERMINATION CHECK AND LOGGING ###
 
         done_flag = False
         if torch.is_tensor(dones):
@@ -445,18 +425,17 @@ def main():
 
         if done_flag:
             # determine termination reason from extras log
+            filtered_actions = None
             if isinstance(extras, dict) and "log" in extras:
                 log = extras["log"]
                 time_out_value = log.get("Episode_Termination/time_out", 0)
                 success_value  = log.get("Episode_Termination/success", 0)
                 if hasattr(time_out_value, 'item'): time_out_value = time_out_value.item()
                 if hasattr(success_value,  'item'): success_value  = success_value.item()
-                if success_value   == 1: final_episode_reason = "ACHIEVED SUCCESS"
-                elif time_out_value == 1: final_episode_reason = "TIME OUT"
+                if success_value   == 1: episode_reason = "ACHIEVED SUCCESS"
+                elif time_out_value == 1: episode_reason = "TIME OUT"
 
-            print(f"[INFO] Episode terminated: {final_episode_reason}")
-            pos_str = " ".join([f"{p:.5f}".replace(".", ",") for p in initial_pos])
-            print(f"Initial position of the joints: {pos_str}")
+            print(f"[INFO] Episode terminated: {episode_reason}")
 
             # ===== SAVE BINARY MASK AND FINAL FRAME AT EPISODE END =====
             if SAVE_MASK:
@@ -499,17 +478,9 @@ def main():
                     print(f"[WARNING] Could not save mask/frame at step {timestep}: {type(e).__name__}: {e}")
             # ===== END MASK/FRAME SAVE =====
 
-            # save Excel data if enabled
-            if SAVE_DATA and timestep_data_list:
-                df = pd.DataFrame(timestep_data_list)
-                excel_filename = os.path.join(log_dir, f"episode_{timestep}_timesteps.xlsx")
-                df.to_excel(excel_filename, index=False)
-                print(f"[INFO] Timestep data saved to: {excel_filename}")
-
-            if observation_data:
-                df_obs   = pd.DataFrame(observation_data)
-                obs_path = os.path.join(log_dir, f"observations_{timestep}_data.xlsx")
-                # df_obs.to_excel(obs_path, index=False)  # uncomment to enable
+            # print initial joint positions at termination on one line
+            pos_str = " ".join([f"{p:.5f}".replace(".", ",") for p in initial_pos])
+            print(f"JOINT RESET POSITION: {pos_str}")
 
             # stop robot by zeroing velocity target
             try:
@@ -521,10 +492,6 @@ def main():
                 print(f"[WARN] Unable to stop robot: {e}")
 
             print("[INFO] Stopping simulation.")
-            # reset buffers for next episode
-            filtered_actions   = None
-            timestep_data_list = []
-            observation_data   = []
             break
 
         else:
@@ -533,25 +500,25 @@ def main():
         if args_cli.video and timestep >= args_cli.video_length:
             break
 
-    ### (23) FINAL SUMMARY ###
+    ### (20) FINAL SUMMARY (using pre-termination values) ###
 
     try:
         print("\n" + "=" * 80)
         print("FINAL SUMMARY")
         print("=" * 80)
-        print(f"Episode terminated: {final_episode_reason}")
-        print(f"Total steps to completion: {final_timestep}")
-        print(f"Final visible gallbladder pixels: {final_visible_pixels} "
+        print(f"Episode terminated: {episode_reason}")
+        print(f"Total steps to completion: {timestep}")
+        print(f"Final visible gallbladder pixels: {last_visible_pixels} "
               f"(threshold: > {GALLBLADDER_PIXEL_THRESHOLD})")
         print("=" * 80)
     except Exception as e:
         print(f"[WARN] Unable to compute final summary: {e}")
 
-    ### (24) CLOSE ENVIRONMENT ###
+    ### (21) CLOSE ENVIRONMENT ###
     env.close()
 
 
-### (25) ENTRY POINT ###
+### (22) ENTRY POINT ###
 if __name__ == "__main__":
     main()
     simulation_app.close()

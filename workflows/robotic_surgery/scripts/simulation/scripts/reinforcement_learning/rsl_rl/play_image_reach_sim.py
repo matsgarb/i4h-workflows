@@ -6,6 +6,7 @@
 """Script to play a checkpoint of an RL agent from RSL-RL.
    IMAGE-BASED version for the REACH task.
    Success criteria: distance error < 3 mm AND orientation error < 0.3 rad.
+   No action filtering. No gallbladder monitoring.
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -27,7 +28,7 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
+args_cli = parser.parse_args()
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -40,22 +41,15 @@ simulation_app = app_launcher.app
 # All imports AFTER Isaac Sim is launched (Isaac Sim must init first)
 # -----------------------------------------------------------------------
 import os
-import cv2
 import numpy as np
 import gymnasium as gym
 import robotic.surgery.tasks  # noqa: F401
 import torch
-import pandas as pd
-from tensordict import TensorDict
+import cv2
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.math import subtract_frame_transforms
 from isaaclab.utils.dict import print_dict
-from isaaclab_rl.rsl_rl import (
-    RslRlOnPolicyRunnerCfg,
-    RslRlVecEnvWrapper,
-    export_policy_as_jit,
-    export_policy_as_onnx,
-)
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 from rsl_rl.runners import OnPolicyRunner
 from robotic.surgery.tasks.surgical.liver_retraction.mdp.rewards import liver_target_pose_world
@@ -74,7 +68,8 @@ def main():
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
-    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
+    log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
@@ -99,14 +94,13 @@ def main():
 
     ### (2) TENSORDICT COMPATIBILITY PATCH ###
     # RSL-RL's OnPolicyRunner expects observations as a TensorDict with a "policy" key.
-    # For image-based RL, we also:
+    # For image-based RL:
     #   - permute image tensors from (B, H, W, C) → (B, C, H, W) and normalize to [0, 1]
-    #   - inject a "dummy_state" key of shape (B, 0) required by some RSL-RL actor configs
+    #   - inject "dummy_state" key of shape (B, 0) required by some RSL-RL actor configs
+
+    from tensordict import TensorDict
 
     def ensure_tensordict(data):
-        """Convert any observation format to TensorDict with 'policy' key.
-        Handles image tensors: permutes (B,H,W,C) → (B,C,H,W) and normalizes to [0,1].
-        """
         obs = data[0] if isinstance(data, tuple) else data
         if isinstance(obs, TensorDict):
             td = obs.to(agent_cfg.device)
@@ -158,7 +152,7 @@ def main():
         print(f"[WARNING] Error during export (playback will continue): {e}")
 
     ### (4) SCENE ASSET REFERENCES ###
-    # Grab handles to the robot, EE frame, and camera sensor from the unwrapped env scene.
+    # Grab handles to the robot and EE frame from the unwrapped env scene.
 
     base_env = getattr(env, "unwrapped", env)
     robot_asset = base_env.scene["robot"]
@@ -169,12 +163,7 @@ def main():
     # liver stabilization warm-up: number of steps with zero actions before inference starts
     STABILIZATION_STEPS = 20
 
-    # action filtering: disabled for reach task (policy outputs are used directly)
-    USE_ACTION_FILTER  = False
-    action_filter_alpha = 0.1
-    filtered_actions   = None
-
-    # observation frame saving (saves the image observation fed to the policy at each step)
+    # observation frame saving (saves the exact camera image fed to the policy at each step)
     SAVE_OBS_FRAMES = False
     obs_frames_dir  = None
     if SAVE_OBS_FRAMES:
@@ -182,33 +171,44 @@ def main():
         os.makedirs(obs_frames_dir, exist_ok=True)
         print(f"[INFO] Observation frames will be saved to: {obs_frames_dir}")
 
-    # data saving: saves per-timestep joint data + errors to Excel at episode end
-    SAVE_DATA          = False
-    timestep_data_list = []
-    if SAVE_DATA:
-        print(f"[INFO] Data saving enabled. Data will be saved as Excel file at episode end.")
+    # reference frame visualization toggle
+    SHOW_REF_FRAMES         = False
+    camera_frame_marker     = None
+    robot_root_frame_marker = None
+    target_frame_marker     = None
+    target_point_marker     = None
+    marker_container        = {"ee_marker": None}
+
+    # action filtering: disabled for reach task (policy outputs used directly)
+    USE_ACTION_FILTER   = False
+    action_filter_alpha = 0.1
+    filtered_actions    = None
 
     # success thresholds for the reach task
     DIST_THRESHOLD   = 0.003  # 3 mm
-    ORIENT_THRESHOLD = 0.3    # rad
+    ORIENT_THRESHOLD = 0.3    # rad (~17°)
 
     ### (6) VARIABLE INITIALIZATION ###
 
     obs      = env.get_observations()
     timestep = 0
 
-    joint_names     = ["Yaw", "Pitch", "Insertion", "Wrist Roll", "Wrist Pitch", "Wrist Yaw"]
-    joint_names_obs = ["Yaw", "Pitch", "Insert", "Wrist_Roll", "Wrist_Pitch", "Wrist_Yaw", "Gripper1", "Gripper2"]
-
-    observation_data = []  # per-step obs data for optional Excel export
+    joint_names = ["Yaw", "Pitch", "Insertion", "Wrist Roll", "Wrist Pitch", "Wrist Yaw"]
 
     # "last good" values: updated every non-terminal step so the final summary
-    # always shows pre-reset values rather than the reset state
+    # always shows pre-reset values rather than the reset state after done=True
+    last_ee_pos_b     = None
+    last_ee_quat_b    = None
+    last_ee_pos_w     = None
+    last_ee_quat_w    = None
     last_dist_error   = None
     last_orient_error = None
 
+    # for the final summary, we also track these at the outer scope
+    episode_reason = "UNKNOWN"
+
     ### (7) INITIAL STATE PRINT ###
-    # Print joint positions, velocities, and EE pose (robot RF) before any action.
+    # Print joint positions, velocities, and initial EE pose (robot RF) before any action.
 
     print("\n" + "="*80)
     print("INITIAL STATE (STEP 0 - RESET)")
@@ -223,13 +223,13 @@ def main():
 
     robot_root_pos  = robot_asset.data.root_state_w[:, :3]
     robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
-    ee_pos_w  = ee_frame.data.target_pos_w[..., 0, :]
-    ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
-    ee_pos_b, ee_quat_b = subtract_frame_transforms(robot_root_pos, robot_root_quat, ee_pos_w, ee_quat_w)
-    e_pos_b  = ee_pos_b[0].cpu().numpy()
-    e_quat_b = ee_quat_b[0].cpu().numpy()
-    print(f"\nEE frame (robot RF): X={e_pos_b[0]:.5f}, Y={e_pos_b[1]:.5f}, Z={e_pos_b[2]:.5f}, "
-          f"w={e_quat_b[0]:.5f}, x={e_quat_b[1]:.5f}, y={e_quat_b[2]:.5f}, z={e_quat_b[3]:.5f}")
+    ee_pos_w_init  = ee_frame.data.target_pos_w[..., 0, :]
+    ee_quat_w_init = ee_frame.data.target_quat_w[..., 0, :]
+    ee_pos_b_init, ee_quat_b_init = subtract_frame_transforms(robot_root_pos, robot_root_quat, ee_pos_w_init, ee_quat_w_init)
+    e_pos_b_init  = ee_pos_b_init[0].cpu().numpy()
+    e_quat_b_init = ee_quat_b_init[0].cpu().numpy()
+    print(f"\nEE frame (robot RF): X={e_pos_b_init[0]:.5f}, Y={e_pos_b_init[1]:.5f}, Z={e_pos_b_init[2]:.5f}, "
+          f"w={e_quat_b_init[0]:.5f}, x={e_quat_b_init[1]:.5f}, y={e_quat_b_init[2]:.5f}, z={e_quat_b_init[3]:.5f}")
     print("="*80 + "\n")
 
     ### (8) LIVER STABILIZATION WARM-UP ###
@@ -254,28 +254,25 @@ def main():
             print("="*80)
 
             ### (9) CAPTURE STATE BEFORE ACTION ###
-            # Save the current observation and joint positions before stepping
-            # so we can compute real_move = pos_after - pos_before.
+            # Save current obs and joint positions before stepping so we can
+            # compute real_move = pos_after - pos_before.
 
             obs_before = obs
             pos_before = robot_asset.data.joint_pos[0][:6].cpu().numpy()
-            true_pos   = robot_asset.data.joint_pos[0].cpu().numpy()
-            true_vel   = robot_asset.data.joint_vel[0].cpu().numpy()
 
             ### (10) OPTIONAL: SAVE OBSERVATION FRAME TO DISK ###
-            # Saves the exact camera_rgb_observation used during training
-            # (resized to 168x168, normalized to [0,1]) as a PNG file.
+            # Saves the exact camera image used during training (168x168, [0,1]) as a PNG.
 
             if SAVE_OBS_FRAMES:
                 try:
                     camera = base_env.scene.sensors["camera"]
-                    rgb = camera.data.output["rgb"][..., :3].float() / 255.0   # [B, H, W, 3]
-                    rgb = rgb.permute(0, 3, 1, 2)                               # [B, 3, H, W]
+                    rgb = camera.data.output["rgb"][..., :3].float() / 255.0  # [B, H, W, 3]
+                    rgb = rgb.permute(0, 3, 1, 2)                              # [B, 3, H, W]
                     if rgb.shape[-2:] != (168, 168):
                         rgb = torch.nn.functional.interpolate(
                             rgb, size=(168, 168), mode='bilinear', align_corners=False
                         )
-                    img_hwc  = rgb[0].permute(1, 2, 0).cpu().numpy()           # [168, 168, 3]
+                    img_hwc   = rgb[0].permute(1, 2, 0).cpu().numpy()
                     img_uint8 = (img_hwc * 255.0).astype(np.uint8)
                     frame_path = os.path.join(obs_frames_dir, f"obs_frame_step_{timestep:04d}.png")
                     cv2.imwrite(frame_path, cv2.cvtColor(img_uint8, cv2.COLOR_RGB2BGR))
@@ -290,8 +287,8 @@ def main():
             raw_policy = actions[0].cpu().numpy()
 
             ### (12) APPLY FILTER OR USE RAW ACTIONS ###
-            # For the reach task, filtering is disabled (USE_ACTION_FILTER = False).
-            # EMA formula if enabled: filtered = alpha * raw + (1 - alpha) * prev_filtered
+            # For reach, filtering is disabled. EMA formula if enabled:
+            # filtered = alpha * raw + (1 - alpha) * prev_filtered
 
             if USE_ACTION_FILTER:
                 if filtered_actions is None:
@@ -306,31 +303,7 @@ def main():
 
             obs, rewards, dones, extras = env.step(actions_to_use)
 
-            ### (14) EXTRACT FLAT OBSERVATION ARRAY FOR LOGGING ###
-            # obs structure: pos(8) + vel(8) + last_actions(6) = 22 components.
-            # For image-based policy the obs TensorDict also contains the image,
-            # but we extract the "policy" key which is the flattened state used for logging.
-
-            obs_data = obs_before.get("policy") if isinstance(obs_before, dict) or hasattr(obs_before, 'get') else obs_before
-            if torch.is_tensor(obs_data):
-                obs_flat = obs_data[0].cpu().numpy() if obs_data.dim() > 1 else obs_data.cpu().numpy()
-            else:
-                obs_flat = np.array(obs_data)
-
-            noisy_pos = obs_flat[:8]
-            noisy_vel = obs_flat[8:16]
-            obs_row   = {'step': timestep}
-            for j in range(8):
-                name = joint_names_obs[j] if j < len(joint_names_obs) else f"joint_{j}"
-                obs_row[f'true_pos_{name}']  = true_pos[j]
-                obs_row[f'noisy_pos_{name}'] = noisy_pos[j]
-                obs_row[f'pos_error_{name}'] = true_pos[j] - noisy_pos[j]
-                obs_row[f'true_vel_{name}']  = true_vel[j]
-                obs_row[f'noisy_vel_{name}'] = noisy_vel[j]
-                obs_row[f'vel_error_{name}'] = true_vel[j] - noisy_vel[j]
-            observation_data.append(obs_row)
-
-            ### (15) DONE FLAG CHECK ###
+            ### (14) DONE FLAG CHECK ###
 
             done_flag = False
             if torch.is_tensor(dones):
@@ -340,55 +313,120 @@ def main():
             elif isinstance(dones, bool):
                 done_flag = dones
 
-            ### (16) ACTION LOGGING ###
+            ### (15) ACTION LOGGING ###
 
             cmd_term          = base_env.action_manager.get_term("arm_action")
             processed_actions = cmd_term.processed_actions[0].cpu().numpy()
             pos_after         = robot_asset.data.joint_pos[0][:6].cpu().numpy()
             real_move         = pos_after - pos_before
 
-            ### (17) POSE EXTRACTION, ERROR COMPUTATION, AND PRINTING (only if not done) ###
-            # Skip on the final step when done=True: the env has already reset the robot,
-            # so poses would reflect the reset state rather than the terminal state.
-            # On that step we use the last stored values instead (see section 20).
+            ### (16) POSE EXTRACTION, ERROR COMPUTATION, AND PRINTING (only if not done) ###
+            # Skip on the terminal step when done=True: env has already reset the robot,
+            # so poses would reflect the reset state. Use last stored values in summary instead.
 
             if not done_flag:
                 robot_root_pos  = robot_asset.data.root_state_w[:, :3]
                 robot_root_quat = robot_asset.data.root_state_w[:, 3:7]
 
                 # --- target liver pose (robot RF) ---
-                target_pose_w  = liver_target_pose_world(base_env)
-                target_pos_w   = target_pose_w[:, :3]
-                target_quat_w  = target_pose_w[:, 3:7]
+                target_pose_w = liver_target_pose_world(base_env)
+                target_pos_w  = target_pose_w[:, :3]
+                target_quat_w = target_pose_w[:, 3:7]
                 target_pos_b, target_quat_b = subtract_frame_transforms(
                     robot_root_pos, robot_root_quat, target_pos_w, target_quat_w
                 )
-                t_pos_b  = target_pos_b[0].cpu().numpy()
-                t_quat_b = target_quat_b[0].cpu().numpy()
+                t_pos_b  = target_pos_b[0].detach().cpu().numpy()
+                t_quat_b = target_quat_b[0].detach().cpu().numpy()
 
-                # --- EE pose (robot RF) ---
+                # --- EE pose (world frame and robot RF) ---
                 ee_pos_w  = ee_frame.data.target_pos_w[..., 0, :]
                 ee_quat_w = ee_frame.data.target_quat_w[..., 0, :]
                 ee_pos_b, ee_quat_b = subtract_frame_transforms(
                     robot_root_pos, robot_root_quat, ee_pos_w, ee_quat_w
                 )
+                e_pos_w  = ee_pos_w[0].cpu().numpy()
+                e_quat_w = ee_quat_w[0].cpu().numpy()
                 e_pos_b  = ee_pos_b[0].cpu().numpy()
                 e_quat_b = ee_quat_b[0].cpu().numpy()
 
                 # --- distance and orientation errors ---
                 ee_pos_b_t  = torch.tensor(e_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
                 ee_quat_b_t = torch.tensor(e_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-                t_pos_b_t = torch.tensor(t_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
-                t_quat_b_t = torch.tensor(t_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                t_pos_b_t   = torch.tensor(t_pos_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
+                t_quat_b_t  = torch.tensor(t_quat_b, device=base_env.device, dtype=torch.float32).unsqueeze(0)
 
                 dist_error   = torch.norm(ee_pos_b_t - t_pos_b_t, dim=1)[0].cpu().item()
                 orient_error = quat_error_magnitude(ee_quat_b_t, t_quat_b_t)[0].cpu().item()
 
                 # store for final summary (overwritten every non-terminal step)
+                last_ee_pos_b     = e_pos_b.copy()
+                last_ee_quat_b    = e_quat_b.copy()
+                last_ee_pos_w     = e_pos_w.copy()
+                last_ee_quat_w    = e_quat_w.copy()
                 last_dist_error   = dist_error
                 last_orient_error = orient_error
 
-                ### (19) PRINT STEP INFO ###
+                ### (17) REFERENCE FRAME VISUALIZATION (optional) ###
+                if SHOW_REF_FRAMES:
+                    try:
+                        num_envs       = robot_root_pos.shape[0]
+                        marker_indices = torch.zeros(num_envs, dtype=torch.int32, device=base_env.device)
+
+                        if robot_root_frame_marker is None:
+                            robot_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/RobotRootFrame_Play")
+                            robot_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            robot_root_frame_marker = VisualizationMarkers(robot_cfg)
+
+                        if target_frame_marker is None:
+                            target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TargetFrame_Play")
+                            target_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            target_frame_marker = VisualizationMarkers(target_cfg)
+
+                        if camera_frame_marker is None:
+                            cam_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CameraFrame_Play")
+                            cam_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            camera_frame_marker = VisualizationMarkers(cam_cfg)
+
+                        if target_point_marker is None:
+                            point_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/TargetPoint_Play")
+                            target_point_marker = VisualizationMarkers(point_cfg)
+
+                        if marker_container["ee_marker"] is None:
+                            ee_marker_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame_Play")
+                            ee_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
+                            marker_container["ee_marker"] = VisualizationMarkers(ee_marker_cfg)
+
+                        robot_root_frame_marker.visualize(robot_root_pos, robot_root_quat, marker_indices=marker_indices)
+                        target_frame_marker.visualize(target_pos_w, target_quat_w, marker_indices=marker_indices)
+
+                        quat_id = torch.zeros((num_envs, 4), device=base_env.device, dtype=target_pos_w.dtype)
+                        quat_id[:, 0] = 1.0
+                        target_point_marker.visualize(target_pos_w, quat_id, marker_indices=marker_indices)
+
+                        ee_pos_w_t  = torch.tensor(e_pos_w, dtype=torch.float32, device=base_env.device).unsqueeze(0)
+                        ee_quat_w_t = torch.tensor(e_quat_w, dtype=torch.float32, device=base_env.device).unsqueeze(0)
+                        marker_container["ee_marker"].visualize(
+                            ee_pos_w_t, ee_quat_w_t,
+                            marker_indices=torch.zeros(1, dtype=torch.int32, device=base_env.device)
+                        )
+
+                        try:
+                            camera_sensor = base_env.scene.sensors["camera"]
+                        except Exception:
+                            camera_sensor = None
+                        if camera_sensor is not None and hasattr(camera_sensor.data, "pos_w"):
+                            cam_pos_w = camera_sensor.data.pos_w
+                            if hasattr(camera_sensor.data, "quat_w"):
+                                cam_quat_w_vis = camera_sensor.data.quat_w
+                            else:
+                                cam_quat_w_vis = torch.zeros((num_envs, 4), device=base_env.device, dtype=cam_pos_w.dtype)
+                                cam_quat_w_vis[:, 0] = 1.0
+                            camera_frame_marker.visualize(cam_pos_w, cam_quat_w_vis, marker_indices=marker_indices)
+                    except Exception as e:
+                        print(f"[DEBUG] ref-frame visualization error: {e}")
+
+                ### (18) PRINT STEP INFO ###
+                # Prints EE pose, target pose, dist/orient errors, and joint table.
 
                 print("EE frame (robot RF):    X={:.4f}, Y={:.4f}, Z={:.4f}, "
                       "w={:.4f}, x={:.4f}, y={:.4f}, z={:.4f}".format(
@@ -400,8 +438,8 @@ def main():
                       t_quat_b[0], t_quat_b[1], t_quat_b[2], t_quat_b[3]))
                 print(f"DISTANCE ERROR: {dist_error:.6f} m | ORIENTATION ERROR: {orient_error:.6f} rad")
 
-                # in-loop success notification (does NOT stop the episode — termination
-                # is handled by the environment's termination manager)
+                # in-loop success notification
+                # (the environment's termination manager is the one that actually ends the episode)
                 if dist_error < DIST_THRESHOLD and orient_error < ORIENT_THRESHOLD:
                     print("\n" + "=" * 80)
                     print("TARGET REACHED!")
@@ -410,17 +448,7 @@ def main():
                     print(f"ORIENTATION ERROR: {orient_error:.6f} rad (threshold: < {ORIENT_THRESHOLD})")
                     print("=" * 80 + "\n")
 
-                # observations printout
-                obs_size      = len(obs_flat)
-                joint_pos_obs = obs_flat[:8]
-                joint_vel_obs = obs_flat[8:16]
-                actions_obs   = obs_flat[16:22]
-
-                print(f"\nOBSERVATIONS (size={obs_size}):")
-                print(f"  joint_pos_rel (8):  {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_pos_obs))}")
-                print(f"  joint_vel_rel (8):  {' | '.join(f'{n:12s}: {x:8.5f}' for n, x in zip(joint_names_obs, joint_vel_obs))}")
-                print(f"  last_action (6):    {' | '.join(f'{i:8.5f}' for i in actions_obs)}")
-
+                # joint table
                 header = f"{'JOINT':<10} | {'POSITION':>10} | {'RAW POLICY':>10} | {'PROCESSED':>10} | {'REAL MOVE':>10}"
                 print(header)
                 print("-" * len(header))
@@ -431,30 +459,10 @@ def main():
                           f"{processed_actions[i]:>10.5f} | "
                           f"{real_move[i]:>10.5f}")
                 print("=" * len(header))
-                print("="*80 + "\n")
 
-                ### (20) SAVE TIMESTEP DATA ###
-                if SAVE_DATA:
-                    row_data = {'timestep': timestep}
-                    for j in range(6):
-                        row_data[f'position_j{j}']         = pos_after[j]
-                        row_data[f'raw_policy_j{j}']       = raw_policy[j]
-                        row_data[f'processed_actions_j{j}'] = processed_actions[j]
-                        row_data[f'real_movement_j{j}']    = real_move[j]
-                    row_data['distance_error']    = dist_error
-                    row_data['orientation_error'] = orient_error
-                    timestep_data_list.append(row_data)
+            print("="*80 + "\n")
 
-        ### (21) SAVE FINAL METRICS BEFORE TERMINATION CHECK ###
-        # Snapshot of errors from the last non-terminal step.
-        # If done_flag is True these will already have been set correctly above.
-
-        final_dist_error   = last_dist_error
-        final_orient_error = last_orient_error
-        final_timestep     = timestep
-        final_episode_reason = "UNKNOWN"
-
-        ### (22) EPISODE TERMINATION CHECK AND LOGGING ###
+        ### (19) EPISODE TERMINATION CHECK AND LOGGING ###
 
         done_flag = False
         if torch.is_tensor(dones):
@@ -466,30 +474,36 @@ def main():
 
         if done_flag:
             # determine termination reason from extras log
+            filtered_actions = None
             if isinstance(extras, dict) and "log" in extras:
                 log = extras["log"]
                 time_out_value = log.get("Episode_Termination/time_out", 0)
                 success_value  = log.get("Episode_Termination/success", 0)
                 if hasattr(time_out_value, 'item'): time_out_value = time_out_value.item()
                 if hasattr(success_value,  'item'): success_value  = success_value.item()
-                if success_value   == 1: final_episode_reason = "ACHIEVED SUCCESS"
-                elif time_out_value == 1: final_episode_reason = "TIME OUT"
+                if success_value   == 1: episode_reason = "ACHIEVED SUCCESS"
+                elif time_out_value == 1: episode_reason = "TIME OUT"
 
-            print(f"[INFO] Episode terminated: {final_episode_reason}")
+            print(f"[INFO] Episode terminated: {episode_reason}")
+
+            # print the last good EE pose and errors (pre-reset values)
+            if last_ee_pos_b is not None:
+                print("\n" + "="*80)
+                print("STEP before reset")
+                print("="*80)
+                print(f"EE frame (world frame): X={last_ee_pos_w[0]:.4f}, Y={last_ee_pos_w[1]:.4f}, "
+                      f"Z={last_ee_pos_w[2]:.4f}, w={last_ee_quat_w[0]:.4f}, x={last_ee_quat_w[1]:.4f}, "
+                      f"y={last_ee_quat_w[2]:.4f}, z={last_ee_quat_w[3]:.4f}")
+                print(f"EE frame (robot RF):   X={last_ee_pos_b[0]:.4f}, Y={last_ee_pos_b[1]:.4f}, "
+                      f"Z={last_ee_pos_b[2]:.4f}, w={last_ee_quat_b[0]:.4f}, x={last_ee_quat_b[1]:.4f}, "
+                      f"y={last_ee_quat_b[2]:.4f}, z={last_ee_quat_b[3]:.4f}")
+                print(f"DISTANCE ERROR: {last_dist_error*1000:.4f} mm | "
+                      f"ORIENTATION ERROR: {last_orient_error*180/np.pi:.4f}° ({last_orient_error:.6f} rad)")
+                print("="*80)
+
+            # print initial joint positions at termination on one line
             pos_str = " ".join([f"{p:.5f}".replace(".", ",") for p in initial_pos])
-            print(f"Initial position of the joints: {pos_str}")
-
-            # save Excel data if enabled
-            if SAVE_DATA and timestep_data_list:
-                df = pd.DataFrame(timestep_data_list)
-                excel_filename = os.path.join(log_dir, f"episode_{timestep}_timesteps.xlsx")
-                df.to_excel(excel_filename, index=False)
-                print(f"[INFO] Timestep data saved to: {excel_filename}")
-
-            if observation_data:
-                df_obs   = pd.DataFrame(observation_data)
-                obs_path = os.path.join(log_dir, f"observations_{timestep}_data.xlsx")
-                # df_obs.to_excel(obs_path, index=False)  # uncomment to enable
+            print(f"JOINT RESET POSITION: {pos_str}")
 
             # stop robot by zeroing velocity target
             try:
@@ -501,8 +515,6 @@ def main():
                 print(f"[WARN] Unable to stop robot: {e}")
 
             print("[INFO] Stopping simulation.")
-            timestep_data_list = []
-            observation_data   = []
             break
 
         else:
@@ -511,27 +523,27 @@ def main():
         if args_cli.video and timestep >= args_cli.video_length:
             break
 
-    ### (23) FINAL SUMMARY (using pre-termination values) ###
+    ### (20) FINAL SUMMARY (using pre-termination values) ###
 
     try:
         print("\n" + "=" * 80)
         print("FINAL SUMMARY")
         print("=" * 80)
-        print(f"Episode terminated: {final_episode_reason}")
-        print(f"Total steps to completion: {final_timestep}")
-        if final_dist_error is not None:
-            print(f"DISTANCE ERROR:    {final_dist_error*1000:.4f} mm (threshold: {DIST_THRESHOLD*1000:.1f} mm)")
-            print(f"ORIENTATION ERROR: {final_orient_error*180/np.pi:.4f}° "
-                  f"({final_orient_error:.6f} rad, threshold: {ORIENT_THRESHOLD} rad)")
+        print(f"Episode terminated: {episode_reason}")
+        print(f"Total steps to completion: {timestep}")
+        if last_dist_error is not None:
+            print(f"DISTANCE ERROR:    {last_dist_error*1000:.4f} mm (threshold: {DIST_THRESHOLD*1000:.1f} mm)")
+            print(f"ORIENTATION ERROR: {last_orient_error*180/np.pi:.4f}° "
+                  f"({last_orient_error:.6f} rad, threshold: {ORIENT_THRESHOLD} rad)")
         print("=" * 80)
     except Exception as e:
         print(f"[WARN] Unable to compute final summary: {e}")
 
-    ### (24) CLOSE ENVIRONMENT ###
+    ### (21) CLOSE ENVIRONMENT ###
     env.close()
 
 
-### (25) ENTRY POINT ###
+### (22) ENTRY POINT ###
 if __name__ == "__main__":
     main()
     simulation_app.close()

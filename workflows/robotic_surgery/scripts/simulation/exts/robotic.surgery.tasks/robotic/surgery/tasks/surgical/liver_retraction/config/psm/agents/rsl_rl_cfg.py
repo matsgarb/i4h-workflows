@@ -149,56 +149,56 @@ class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         max_grad_norm=0.5,
     )
 
-# @configclass
-# class PSMLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-#     num_steps_per_env = 128
-#     max_iterations = 15000
-#     save_interval = 1000
-#     experiment_name = "psm_lift"
-#     run_name = ""
-#     resume = False
-#     empirical_normalization = False
-#     # IMAGE BASED RL
-#     obs_groups = {
-#         "policy": ["policy", "dummy_state"],
-#         "critic": ["policy", "dummy_state"],
-#     }
+@configclass
+class PSMLiftPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    num_steps_per_env = 128
+    max_iterations = 15000
+    save_interval = 1000
+    experiment_name = "psm_reach"
+    run_name = ""
+    resume = False
+    empirical_normalization = False
+    # IMAGE BASED RL
+    obs_groups = {
+        "policy": ["policy", "dummy_state"],
+        "critic": ["policy", "dummy_state"],
+    }
    
-#     policy = RslRlPpoActorCriticCNNCfg(
-#         class_name="ActorCriticCNN",
-#         init_noise_std=1.0,
-#         actor_cnn_cfg={
-#             "output_channels": [32, 64, 64], 
-#             "kernel_size": [8, 4, 3],       
-#             "stride": [4, 2, 1],             
-#             "activation": "relu",
-#         },
-#         critic_cnn_cfg={
-#             "output_channels": [32, 64, 64], 
-#             "kernel_size": [8, 4, 3],        
-#             "stride": [4, 2, 1],
-#             "activation": "relu",
-#         },
-#         actor_hidden_dims=[512],
-#         critic_hidden_dims=[512],
-#         activation="relu",
-#         actor_last_activation="tanh",
-#     )
-#     algorithm = RslRlPpoAlgorithmCfg(
-#         class_name="PPO",
-#         value_loss_coef=0.5,
-#         use_clipped_value_loss=True,
-#         clip_param=0.2,
-#         entropy_coef=0.001,
-#         num_learning_epochs=4,
-#         num_mini_batches=4,
-#         learning_rate=2.5e-4,
-#         schedule="linear",
-#         gamma=0.995,
-#         lam=0.95,
-#         desired_kl=None,
-#         max_grad_norm=0.5,
-#     )
+    policy = RslRlPpoActorCriticCNNCfg(
+        class_name="ActorCriticCNN",
+        init_noise_std=1.0,
+        actor_cnn_cfg={
+            "output_channels": [32, 64, 64], 
+            "kernel_size": [8, 4, 3],       
+            "stride": [4, 2, 1],             
+            "activation": "relu",
+        },
+        critic_cnn_cfg={
+            "output_channels": [32, 64, 64], 
+            "kernel_size": [8, 4, 3],        
+            "stride": [4, 2, 1],
+            "activation": "relu",
+        },
+        actor_hidden_dims=[512],
+        critic_hidden_dims=[512],
+        activation="relu",
+        actor_last_activation="tanh",
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        class_name="PPO",
+        value_loss_coef=0.5,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=4,
+        num_mini_batches=4,
+        learning_rate=2.5e-4,
+        schedule="linear",
+        gamma=0.995,
+        lam=0.95,
+        desired_kl=None,
+        max_grad_norm=0.5,
+    )
 
 
 # # IMAGE BASED RL - ResNet50 (backbone)
