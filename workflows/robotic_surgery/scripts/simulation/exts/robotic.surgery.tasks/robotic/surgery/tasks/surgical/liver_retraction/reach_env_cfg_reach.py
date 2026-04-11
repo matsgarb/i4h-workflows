@@ -144,7 +144,7 @@ class RewardsCfg:
     """Reward terms for the MDP."""
     reaching_object = RewTerm(func=mdp.object_ee_distance, weight=-0.8, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
     ee_orientation = RewTerm(func=mdp.object_ee_orientation_error, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
-    success_reward = RewTerm(func=mdp.final_success_reward, weight=1.0, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.001)
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
@@ -206,6 +206,6 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        ù# self.episode_length_s = 12
+        self.episode_length_s = 12
         # simulation settings
         self.sim.dt = 1.0 / 80.0
