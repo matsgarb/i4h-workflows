@@ -10,7 +10,7 @@ from isaaclab.sensors import FrameTransformerCfg, CameraCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.assets import DeformableObjectCfg
-from robotic.surgery.tasks.surgical.liver_retraction.reach_env_cfg_reach import ReachEnvCfg
+from robotic.surgery.tasks.surgical.liver_retraction.lift_env_cfg_reach import LiftEnvCfg
 from simulation.utils.assets import robotic_surgery_assets
 from isaaclab.sim.schemas.schemas_cfg import DeformableBodyPropertiesCfg
 from isaaclab.sim.spawners.materials import DeformableBodyMaterialCfg, PreviewSurfaceCfg
@@ -27,7 +27,7 @@ from robotic.surgery.assets.psm import PSM_CFG_REACH  # isort: skip
 
 
 @configclass
-class PSMReachEnvCfg(ReachEnvCfg):
+class PSMLiftEnvCfg(LiftEnvCfg):
     """PSM-based liver retraction environment configuration."""
     
     def __post_init__(self):
@@ -477,7 +477,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
         )
 
 @configclass
-class PSMReachEnvCfg_PLAY(PSMReachEnvCfg):
+class PSMLiftEnvCfg_PLAY(PSMLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()

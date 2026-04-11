@@ -49,7 +49,7 @@ q_light = q_light.tolist()
 
 
 @configclass
-class ReachSceneCfg(InteractiveSceneCfg):
+class LiftSceneCfg(InteractiveSceneCfg):
     """Configuration for the scene with a robotic arm."""
 
     # world
@@ -303,8 +303,8 @@ class CurriculumCfg:
 
 
 @configclass
-class ReachEnvCfg(ManagerBasedRLEnvCfg):
-    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=2.5)
+class LiftEnvCfg(ManagerBasedRLEnvCfg):
+    scene: LiftSceneCfg = LiftSceneCfg(num_envs=4096, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()

@@ -7,7 +7,7 @@ from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
 from isaaclab.utils import configclass
 
-from . import joint_pos_env_cfg_reach
+from . import joint_pos_env_cfg_lift
 
 ##
 # Pre-defined configs
@@ -16,7 +16,7 @@ from robotic.surgery.assets.psm import PSM_HIGH_PD_CFG  # isort: skip
 
 
 @configclass
-class PSMReachEnvCfg(joint_pos_env_cfg_reach.PSMReachEnvCfg):
+class PSMLiftEnvCfg(joint_pos_env_cfg_lift.PSMLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -44,7 +44,7 @@ class PSMReachEnvCfg(joint_pos_env_cfg_reach.PSMReachEnvCfg):
 
 
 @configclass
-class PSMReachEnvCfg_PLAY(PSMReachEnvCfg):
+class PSMLiftEnvCfg_PLAY(PSMLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
