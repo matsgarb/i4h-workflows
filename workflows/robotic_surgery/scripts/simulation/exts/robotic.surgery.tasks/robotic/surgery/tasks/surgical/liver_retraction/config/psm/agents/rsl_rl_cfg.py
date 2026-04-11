@@ -131,7 +131,7 @@ class PSMReachPpoActorCriticCNNCfg(RslRlPpoActorCriticCfg):
 #         max_grad_norm=1.0,
 #     )
 
-
+'''
 # IMAGE BASED RL (like the paper)
 @configclass
 class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
@@ -183,7 +183,7 @@ class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=None,
         max_grad_norm=0.5,
     )
-
+'''
 
 # # IMAGE BASED RL - ResNet18 (backbone)
 # @configclass
@@ -270,50 +270,50 @@ class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
 #     )
 
 
-# # STATE BASED RL
-# @configclass
-# class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-#     num_steps_per_env = 128
-#     max_iterations = 8000
-#     save_interval = 2000
-#     experiment_name = "psm_reach"
-#     run_name = ""
-#     resume = False
-#     empirical_normalization = False
-  
-#     ### NEW RSL_RL
-#     obs_groups = {
-#         "policy": ["policy"],
-#         "critic": ["policy"],
-#     }
-#     ###
-#     policy = RslRlPpoActorCriticCfg(
-#         ### NEW RSL_RL
-#         class_name="rsl_rl.modules.actor_critic.ActorCritic",
-#         ###
-#         init_noise_std=1.0,
-#         actor_hidden_dims=[256, 128, 64],
-#         critic_hidden_dims=[256, 128, 64],
-#         activation="elu",
-#         # actor_last_activation="tanh"
-#      )
-#     algorithm = RslRlPpoAlgorithmCfg(
-#         ## NEW RSL_RL
-#         class_name="rsl_rl.algorithms.ppo.PPO",
-#         ###
-#         value_loss_coef=1.0,
-#         use_clipped_value_loss=True,
-#         clip_param=0.2,
-#         entropy_coef=0.01,
-#         num_learning_epochs=8,
-#         num_mini_batches=4,
-#         learning_rate=1.0e-3,
-#         schedule="adaptive",
-#         gamma=0.99,
-#         lam=0.95,
-#         desired_kl=0.01,
-#         max_grad_norm=1.0,
-#     )
+# STATE BASED RL
+@configclass
+class PSMReachPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    num_steps_per_env = 128
+    max_iterations = 8000
+    save_interval = 2000
+    experiment_name = "psm_reach"
+    run_name = ""
+    resume = False
+    empirical_normalization = False
+
+    ### NEW RSL_RL
+    obs_groups = {
+        "policy": ["policy"],
+        "critic": ["policy"],
+    }
+    ###
+    policy = RslRlPpoActorCriticCfg(
+        ### NEW RSL_RL
+        class_name="rsl_rl.modules.actor_critic.ActorCritic",
+        ###
+        init_noise_std=1.0,
+        actor_hidden_dims=[256, 128, 64],
+        critic_hidden_dims=[256, 128, 64],
+        activation="elu",
+        # actor_last_activation="tanh"
+     )
+    algorithm = RslRlPpoAlgorithmCfg(
+        ## NEW RSL_RL
+        class_name="rsl_rl.algorithms.ppo.PPO",
+        ###
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.01,
+        num_learning_epochs=8,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+    )
 
 
 # # STATE BASED RL 2

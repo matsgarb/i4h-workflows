@@ -245,7 +245,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # self.rewards.ee_orientation.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.ee_below_target_penalty.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.success_bonus.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
-        # self.terminations.success.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
+        self.terminations.success.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         # self.rewards.success_reward.params["asset_cfg"].body_names = ["psm_tool_tip_link"] # REACH + INSERT
         # self.rewards.reach_phase_reward.params["asset_cfg"].body_names = ["psm_tool_tip_link"]
         
@@ -255,23 +255,23 @@ class PSMReachEnvCfg(ReachEnvCfg):
         # # override actions
         
         
-        # self.actions.arm_action = mdp.JointPositionActionCfg(
-        #     asset_name="robot",
-        #     joint_names=[
-        #         "psm_yaw_joint",
-        #         "psm_pitch_end_joint",
-        #         "psm_main_insertion_joint",
-        #         "psm_tool_roll_joint",
-        #         "psm_tool_pitch_joint",
-        #         "psm_tool_yaw_joint",
-        #     ],
-        #     scale = 0.02, # STATE BASED RL
-        #     # scale=0.015, # IMAGE BASED RL
-        #     use_default_offset=True,
-        # )
+        self.actions.arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot",
+            joint_names=[
+                "psm_yaw_joint",
+                "psm_pitch_end_joint",
+                "psm_main_insertion_joint",
+                "psm_tool_roll_joint",
+                "psm_tool_pitch_joint",
+                "psm_tool_yaw_joint",
+            ],
+            scale = 0.02, # STATE BASED RL
+            # scale=0.015, # IMAGE BASED RL
+            use_default_offset=True,
+        )
         
         
-        
+        '''
         self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
             asset_name="robot",
             joint_names=[
@@ -286,7 +286,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
             scale = 0.001,
             use_zero_offset=True,
         )
-        
+        '''
 
         # =============================================================
         # ===================== EVENTS MANAGEMENT =====================
@@ -339,12 +339,12 @@ class PSMReachEnvCfg(ReachEnvCfg):
                 # per-joint ranges: [yaw, pitch, insertion, roll, pitch, yaw, gripper 1, gripper 2]
                 # (-0.2, 0.2) for reach STATE based, (-0.1, 0.1) for reach IMAGE based,  (0, 0) for lift
                 "position_ranges": [
-                    (-0.0, 0.0),  # yaw
-                    (-0.0, 0.0),  # pitch
-                    (0, 0.00),  # insertionl
-                    (-0.0, 0.0),  # tool roll
-                    (-0.0, 0.0),  # tool pitch
-                    (-0.0, 0.0),  # tool yaw
+                    (-0.2, 0.2),  # yaw
+                    (-0.2, 0.2),  # pitch
+                    (0, 0.01),  # insertion
+                    (-0.2, 0.2),  # tool roll
+                    (-0.2, 0.2),  # tool pitch
+                    (-0.2, 0.2),  # tool yaw
                     (0, 0),  # gripper 1
                     (0, 0),  # gripper 2
                     # (-0.0, -0.0),  # yaw
