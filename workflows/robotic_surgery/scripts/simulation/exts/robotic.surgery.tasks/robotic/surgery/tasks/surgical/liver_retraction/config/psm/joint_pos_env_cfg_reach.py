@@ -10,7 +10,7 @@ from isaaclab.sensors import FrameTransformerCfg, CameraCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.assets import DeformableObjectCfg
-from robotic.surgery.tasks.surgical.liver_retraction.reach_env_cfg import ReachEnvCfg
+from robotic.surgery.tasks.surgical.liver_retraction.reach_env_cfg_reach import ReachEnvCfg
 from simulation.utils.assets import robotic_surgery_assets
 from isaaclab.sim.schemas.schemas_cfg import DeformableBodyPropertiesCfg
 from isaaclab.sim.spawners.materials import DeformableBodyMaterialCfg, PreviewSurfaceCfg
@@ -20,7 +20,7 @@ from isaaclab.utils.math import quat_mul
 # Pre-defined configs
 ##
 from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
-from robotic.surgery.assets.psm import PSM_CFG  # isort: skip
+from robotic.surgery.assets.psm import PSM_CFG_REACH  # isort: skip
 ##
 # Environment configuration
 ##
@@ -51,7 +51,7 @@ class PSMReachEnvCfg(ReachEnvCfg):
         )
 
         # switch robot to PSM
-        self.scene.robot = PSM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = PSM_CFG_REACH.replace(prim_path="{ENV_REGEX_NS}/Robot")
         
         # Rotation quaternion for camera
         q_init = torch.tensor((1.0, 0.0, 0.0, 0.0))  # identity

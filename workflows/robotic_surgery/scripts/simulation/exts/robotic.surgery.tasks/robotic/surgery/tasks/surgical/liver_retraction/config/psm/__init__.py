@@ -5,7 +5,7 @@
 
 import gymnasium as gym
 
-from . import agents, ik_abs_env_cfg, ik_rel_env_cfg, joint_pos_env_cfg
+from . import agents, ik_abs_env_cfg_reach, ik_rel_env_cfg_reach, joint_pos_env_cfg_reach
 
 ##
 # Register Gym environments.
@@ -20,7 +20,7 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": joint_pos_env_cfg.PSMReachEnvCfg,
+        "env_cfg_entry_point": joint_pos_env_cfg_reach.PSMReachEnvCfg,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
 )
@@ -30,7 +30,7 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": joint_pos_env_cfg.PSMReachEnvCfg_PLAY,
+        "env_cfg_entry_point": joint_pos_env_cfg_reach.PSMReachEnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
 )
@@ -43,7 +43,7 @@ gym.register(
     id="Isaac-Liver-PSM-IK-Abs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": ik_abs_env_cfg.PSMReachEnvCfg,
+        "env_cfg_entry_point": ik_abs_env_cfg_reach.PSMReachEnvCfg,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
     disable_env_checker=True,
@@ -53,7 +53,7 @@ gym.register(
     id="Isaac-Liver-PSM-IK-Abs-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": ik_abs_env_cfg.PSMReachEnvCfg_PLAY,
+        "env_cfg_entry_point": ik_abs_env_cfg_reach.PSMReachEnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
     disable_env_checker=True,
@@ -67,7 +67,7 @@ gym.register(
     id="Isaac-Liver-PSM-IK-Rel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": ik_rel_env_cfg.PSMReachEnvCfg,
+        "env_cfg_entry_point": ik_rel_env_cfg_reach.PSMReachEnvCfg,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
     disable_env_checker=True,
@@ -77,7 +77,7 @@ gym.register(
     id="Isaac-Liver-PSM-IK-Rel-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": ik_rel_env_cfg.PSMReachEnvCfg_PLAY,
+        "env_cfg_entry_point": ik_rel_env_cfg_reach.PSMReachEnvCfg_PLAY,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_cfg.PSMReachPPORunnerCfg,
     },
     disable_env_checker=True,

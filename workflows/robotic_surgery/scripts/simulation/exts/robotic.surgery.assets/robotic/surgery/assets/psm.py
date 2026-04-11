@@ -85,10 +85,10 @@ PSM_CFG = ArticulationCfg(
         
         # reach_liver NEWNEW
         joint_pos={
-            "psm_yaw_joint": 0.9773,  # 56 degrees
-            "psm_pitch_end_joint": -0.3491, # -20 degrees
+            "psm_yaw_joint": 0.0,  # 56 degrees
+            "psm_pitch_end_joint": 0.0, # -20 degrees
             "psm_main_insertion_joint": 0.080,  # 80 mm
-            "psm_tool_roll_joint": 1.0,  # 57 degrees
+            "psm_tool_roll_joint": 0.0,  # 57 degrees
             "psm_tool_pitch_joint": 0.0, 
             "psm_tool_yaw_joint": 0.0,
             "psm_tool_gripper1_joint": -0.09, 
@@ -184,6 +184,37 @@ PSM_CFG = ArticulationCfg(
 )
 """Configuration of dVRK PSM robot arm."""
 
+PSM_CFG_REACH = PSM_CFG.copy()
+PSM_CFG_REACH.init_state = ArticulationCfg.InitialStateCfg(
+    joint_pos={
+        "psm_yaw_joint": 0.9773,
+        "psm_pitch_end_joint": -0.3491,
+        "psm_main_insertion_joint": 0.080,
+        "psm_tool_roll_joint": 1.0,
+        "psm_tool_pitch_joint": 0.0,
+        "psm_tool_yaw_joint": 0.0,
+        "psm_tool_gripper1_joint": -0.09,
+        "psm_tool_gripper2_joint": 0.09,
+    },
+    pos=(-0.07, 0.05, 0.08),
+    rot=q_final_rot,
+)
+
+PSM_CFG_LIFT = PSM_CFG.copy()
+PSM_CFG_LIFT.init_state = ArticulationCfg.InitialStateCfg(
+    joint_pos={
+        "psm_yaw_joint":  0.8836,
+        "psm_pitch_end_joint": -0.3286,
+        "psm_main_insertion_joint": 0.1045,
+        "psm_tool_roll_joint": 0.9168,
+        "psm_tool_pitch_joint": 0.3883,
+        "psm_tool_yaw_joint": 0.4726,
+        "psm_tool_gripper1_joint": -0.09,
+        "psm_tool_gripper2_joint": 0.09,
+    },
+    pos=(-0.07, 0.05, 0.08),
+    rot=q_final_rot,
+)
 
 PSM_HIGH_PD_CFG = PSM_CFG.copy()
 PSM_HIGH_PD_CFG.spawn.rigid_props.disable_gravity = True
