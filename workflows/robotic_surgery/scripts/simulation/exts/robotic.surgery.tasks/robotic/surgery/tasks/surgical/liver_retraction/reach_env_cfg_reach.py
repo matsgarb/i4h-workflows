@@ -30,11 +30,6 @@ import torch
 from . import mdp
 
 
-# Light orientation target: X = -90°, Y = 75°, Z = 90° (apply X, then Y, then Z)
-# q_y_90 = torch.tensor((0.70710678, 0.0, 0.70710678, 0.0))  # rot 90° around Y
-# q_z_45 = torch.tensor((0.92387953, 0.0, 0.0, 0.38268343))  # rot 45° around Z
-# q_light = quat_mul(q_z_45, q_y_90)  # apply Y then Z
-
 # Light orientation target: X = -90°, Y = 75°, Z = 90° (XYZ convention)
 q_light = quat_from_euler_xyz(
     torch.tensor(math.radians(-90.0)), 
@@ -109,8 +104,6 @@ class ObservationsCfg:
         # ===== OPTION 1: STATE BASED RL =====
         joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        # # # object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
-        # # # target_pose = ObsTerm(func=mdp.liver_target_pose_world, params={"object_cfg": SceneEntityCfg("liver")})
         actions = ObsTerm(func=mdp.last_action)
         def __post_init__(self):
             self.enable_corruption = True
@@ -121,13 +114,13 @@ class ObservationsCfg:
         # def __post_init__(self):
         #     self.enable_corruption = False
         #     self.concatenate_terms = True
-        '''
-        # ===== OPTION 3: IMAGE BASED RL - FRAME STACKING (NEW) =====
-        camera_rgbd = ObsTerm(func=mdp.camera_rgb_frame_stack_observation)
-        def __post_init__(self):
-            self.enable_corruption = False
-            self.concatenate_terms = True
-        '''
+
+        # # ===== OPTION 3: IMAGE BASED RL - FRAME STACKING (NEW) =====
+        # camera_rgbd = ObsTerm(func=mdp.camera_rgb_frame_stack_observation)
+        # def __post_init__(self):
+        #     self.enable_corruption = False
+        #     self.concatenate_terms = True
+        
         # # ===== OPTION 4: HYBRID RL - IMAGE + STATE (CURRENT) =====
         # camera_rgb = ObsTerm(func=mdp.camera_rgb_observation)
         # actions = ObsTerm(func=mdp.last_action)
@@ -144,88 +137,32 @@ class ObservationsCfg:
 @configclass
 class EventCfg:
     reset_robot_joints: EventTerm = MISSING
-    reset_liver_position: EventTerm = MISSING # lift_liver, reach_and_lift_liver
-    # reset_camera_pose: EventTerm = MISSING
-
-    # # # lift_liver
-    # attach_liver_node: EventTerm = MISSING
-    # drive_liver_node: EventTerm = MISSING
-
-    # # reach_liver
-    # reset_gallbladder_position: EventTerm = MISSING
-    
-    # # REACH + INSERT
-    # reset_phase: EventTerm = MISSING
-    # phase_update: EventTerm = MISSING
-
-    # reset_phase = EventTerm(func=mdp.reset_phase,mode="reset",)
-    # phase_update = EventTerm(
-    #     func=mdp.update_phase_reach_to_insert,
-    #     mode="interval",
-    #     interval_range_s=(0.0,0.0),
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names="psm_tool_tip_link"),"object_cfg": SceneEntityCfg("liver"),"pos_threshold": 0.002,"or_threshold": 0.2},
-    # )
-    
-    
-    
+    reset_liver_position: EventTerm = MISSING
 
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
-    # # # reach_liver
-    # reaching_object = RewTerm(func=mdp.object_ee_distance, weight=-0.8, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
-    # ee_orientation = RewTerm(func=mdp.object_ee_orientation_error, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
-   
-    # # # REACH + INSERT
-    # # insert_lift = RewTerm(func=mdp.insert_lift_reward, weight=1.0, params={"object_cfg": SceneEntityCfg("liver")})
-    # # reach_to_insert_bonus = RewTerm(func=mdp.reach_to_insert_transition_bonus,weight=1.0,params={"bonus": 0.03})
-    # # insert_drive = RewTerm(
-    # #     func=mdp.insert_phase_drive_l2, 
-    # #     weight=-2.5,
-    # #     params={
-    # #         "asset_cfg": SceneEntityCfg("robot", body_names=MISSING), 
-    # #         "object_cfg": SceneEntityCfg("liver")
-    # #     }
-    # # )
-    # # reach_phase_reward = RewTerm(
-    # #     func=mdp.reach_phase_transition_reward,
-    # #     weight=1.0,
-    # #     params={
-    # #         "asset_cfg": SceneEntityCfg("robot", body_names=MISSING),
-    # #         "object_cfg": SceneEntityCfg("liver"),
-    # #         "pos_threshold": 0.005,
-    # #         "or_threshold": 0.1,
-    # #     },
-    # # )
-    # success_reward = RewTerm(func=mdp.final_success_reward, weight=1.0, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
-
-    # lift_liver
-    visual_exposure = RewTerm(func=mdp.visual_exposure_reward, weight=0.005)
-
-    vertical_lifting = RewTerm(
-        func=mdp.vertical_lifting_reward,
-        weight=10.0,                        
-        params={"lateral_penalty_coef": 1.0}, 
+    reaching_object = RewTerm(func=mdp.object_ee_distance, weight=-0.8, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    ee_orientation = RewTerm(func=mdp.object_ee_orientation_error, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    success_reward = RewTerm(func=mdp.final_success_reward, weight=1.0, params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")})
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.001)
+    joint_vel = RewTerm(
+        func=mdp.joint_vel_l2,
+        weight=-0.01, # -0.02, -0.001
+        params={"asset_cfg": SceneEntityCfg("robot")},
     )
-
-    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.001)
-    # joint_vel = RewTerm(
-    #     func=mdp.joint_vel_l2,
-    #     weight=-0.01, # -0.02, -0.001
-    #     params={"asset_cfg": SceneEntityCfg("robot")},
-    # )
     
-    # ee_below_target_penalty = RewTerm(
-    #     func=mdp.ee_below_target_penalty,
-    #     weight=-0.01,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")},
-    # )
+    ee_below_target_penalty = RewTerm(
+        func=mdp.ee_below_target_penalty,
+        weight=-0.01,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver")},
+    )
     
-    # success_bonus = RewTerm(
-    #     func=mdp.success_reached,
-    #     weight=1,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver"), "pos_threshold": 0.003, "or_threshold": 0.3},
-    # )
+    success_bonus = RewTerm(
+        func=mdp.success_reached,
+        weight=1,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING), "object_cfg": SceneEntityCfg("liver"), "pos_threshold": 0.003, "or_threshold": 0.3},
+    )
     
 
 @configclass
@@ -233,31 +170,13 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
     
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    
-    # success = DoneTerm(
-    #     func=mdp.gallbladder_visibility_success,
-    #     params={"pixel_threshold": 27000}, # 33000
-    # )
-    
-    # REACH + INSERT
-    # success = DoneTerm(
-    # 	func=mdp.achieved_insert_target,
-    # 	params = {
-    # 		"asset_cfg": SceneEntityCfg("robot", body_names = MISSING),
-    # 		"object_cfg": SceneEntityCfg("liver"),
-    # 		"pos_threshold": 0.002, # 0.002,
-    # 		# "or_threshold": 0.2, # 0.05,``
-    # 		},
-	# )
-    
-    # # REACH ONLY reach_liver
     success = DoneTerm(
     	func=mdp.achieved_target,
     	params = {
     	"asset_cfg": SceneEntityCfg("robot", body_names = MISSING),
     	"object_cfg": SceneEntityCfg("liver"),
-    	"pos_threshold": 0.003, # 0.0025,
-    		"or_threshold": 0.3, # 0.05,
+    	"pos_threshold": 0.003, 
+    		"or_threshold": 0.3,
     	},
 	)
 
@@ -266,39 +185,9 @@ class TerminationsCfg:
 class CurriculumCfg:
 
     """Curriculum terms for the MDP."""
-    # Changes action_rate weight to -0.005 after 12800 steps following first success
-    # action_rate = CurrTerm(
-    #     func=mdp.modify_reward_weight_after_success_steps, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 12800}
-    # )
-
     action_rate = CurrTerm(
-        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 25600} # -0.01, 128000, 36000, 448000, 640000
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 25600}
     )
-
-    # visual_exposure = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "visual_exposure", "weight": 0.01, "num_steps": 320000}
-    # )
-
-
-    # joint_vel = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.05, "num_steps": 640000}
-    # )
-    
-    # action_rate_phase1 = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 384000}
-    # )
-    # action_rate_phase2 = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.01, "num_steps": 600000}
-    # )
-
-    # joint_vel_phase1 = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.2, "num_steps": 384000}
-    # )
-    # joint_vel_phase2 = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.4, "num_steps": 600000}
-    # )
-    
-    
     
 
 
@@ -310,14 +199,13 @@ class ReachEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    # curriculum: CurriculumCfg = CurriculumCfg()
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self):
         """Post initialization."""
         # general settings
         self.decimation = 2
         self.sim.render_interval = self.decimation
-        self.episode_length_s = 15
-        # self.episode_length_s = 12
+        ù# self.episode_length_s = 12
         # simulation settings
         self.sim.dt = 1.0 / 80.0

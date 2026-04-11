@@ -5,8 +5,10 @@
 
 import gymnasium as gym
 
+
 from . import agents, ik_abs_env_cfg_reach, ik_rel_env_cfg_reach, joint_pos_env_cfg_reach
 
+###### REACH ENV CONFIGS ######
 ##
 # Register Gym environments.
 ##
@@ -16,7 +18,7 @@ from . import agents, ik_abs_env_cfg_reach, ik_rel_env_cfg_reach, joint_pos_env_
 ##
 
 gym.register(
-    id="Isaac-Liver-PSM-v0",
+    id="Isaac-Liver-Reach-PSM-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
@@ -26,7 +28,7 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Liver-PSM-Play-v0",
+    id="Isaac-Liver-Reach-PSM-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
@@ -40,7 +42,7 @@ gym.register(
 ##
 
 gym.register(
-    id="Isaac-Liver-PSM-IK-Abs-v0",
+    id="Isaac-Liver-Reach-PSM-IK-Abs-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": ik_abs_env_cfg_reach.PSMReachEnvCfg,
@@ -50,7 +52,7 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Liver-PSM-IK-Abs-Play-v0",
+    id="Isaac-Liver-Reach-PSM-IK-Abs-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": ik_abs_env_cfg_reach.PSMReachEnvCfg_PLAY,
@@ -64,7 +66,7 @@ gym.register(
 ##
 
 gym.register(
-    id="Isaac-Liver-PSM-IK-Rel-v0",
+    id="Isaac-Liver-Reach-PSM-IK-Rel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": ik_rel_env_cfg_reach.PSMReachEnvCfg,
@@ -74,7 +76,7 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Liver-PSM-IK-Rel-Play-v0",
+    id="Isaac-Liver-Reach-PSM-IK-Rel-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": ik_rel_env_cfg_reach.PSMReachEnvCfg_PLAY,
