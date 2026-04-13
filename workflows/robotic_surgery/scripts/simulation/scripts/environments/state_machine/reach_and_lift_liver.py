@@ -1,7 +1,7 @@
 import argparse
 from isaaclab.app import AppLauncher
 
-# --- Configurazione Argparse ---
+# --- Argparse Configuration ---
 parser = argparse.ArgumentParser(description="Surgical Robotics: Reach and Lift Liver with clean reset.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric.")
 parser.add_argument("--world_ref_vis", action="store_true", default=False, help="Enable reference frame visualization.")
@@ -9,7 +9,7 @@ parser.add_argument("--num_envs", type=int, default=1, help="Number of environme
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-# Lancio dell'app Isaac Sim
+# Launch Isaac Sim app
 app_launcher = AppLauncher(headless=args_cli.headless, livestream=args_cli.livestream, enable_cameras=args_cli.enable_cameras)
 simulation_app = app_launcher.app
 
@@ -32,7 +32,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 wp.init()
 
 # --- TARGET NODE INDEX ---
-TARGET_NODE_IDX = 433 # 12 res --> 433, 9 res --> 3
+TARGET_NODE_IDX = 433 
 
 # --- WARP STATE MACHINE ---
 class ReachSmState:
@@ -105,7 +105,7 @@ class ReachSm:
         wp.launch(kernel=infer_state_machine, dim=self.num_envs, inputs=[self.sm_dt_wp, self.sm_state_wp, self.sm_wait_time_wp, rest_pose_wp, reach_pose_wp, lift_pose_wp, self.des_ee_pose_wp, ee_pos_wp, reach_target_pos_wp], device=self.device)
         return self.des_ee_pose[:, [0, 1, 2, 6, 3, 4, 5]]
 
-# --- Utility per Maschera Colecisti ---
+# --- Gallbladder Mask Utility ---
 def get_gallbladder_mask(rgb_image):
     img = rgb_image.astype(np.float32)
     r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
@@ -116,30 +116,27 @@ def get_gallbladder_mask(rgb_image):
     return np.sum(final_mask > 0), final_mask
 
 def main():
-    # 1. Caricamento Ambiente
+    # 1. Environment setup
     env_cfg: ReachEnvCfg = parse_env_cfg("Isaac-Liver-PSM-IK-Abs-v0", device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric)
     env = gym.make("Isaac-Liver-PSM-v0", cfg=env_cfg)
     device = env.unwrapped.device
     num_envs = env.unwrapped.num_envs
 
-    # 2. Configurazione Robot (Reset Joints)
+    # 2. Robot configuration (joint reset)
     robot_asset = env.unwrapped.scene["robot"]
     NEW_RESET_JOINTS = [0.18, 0.1, 0.01, 0.0, 0.0, 0.0, -0.09, 0.09]
     new_reset_tensor = torch.tensor(NEW_RESET_JOINTS, device=device).repeat(num_envs, 1)
     robot_asset.data.default_joint_pos[:] = new_reset_tensor
     robot_asset.write_joint_state_to_sim(new_reset_tensor, torch.zeros_like(new_reset_tensor))
 
-    # 3. Inizializzazione Fegato (Deformabile)
+    # 3. Liver initialization (deformable)
     liver = env.unwrapped.scene["liver"]
     num_nodes = liver.data.nodal_pos_w.shape[1]
-    # Buffer per i target cinematici, verrà aggiornato ogni step partendo dallo stato attuale
     nodal_kinematic_target = liver.data.nodal_kinematic_target.clone()
-    # Snapshot nodale da catturare una sola volta (ora gestito via EventTerm in joint_pos_env_cfg)
-    # liver_rest_snapshot = None
     
     env.reset()
 
-    # Visualizzazione nodi: se world_ref_vis mostra tutti i nodi, altrimenti solo il 491
+    # Node visualization: show all nodes with world_ref_vis, otherwise only node 491
     if not args_cli.headless:
         import isaacsim.core.utils.stage as stage_utils
         import isaacsim.core.utils.prims as prim_utils
@@ -164,49 +161,36 @@ def main():
                 color = Gf.Vec3f(1.0, 0.0, 0.0) if i == TARGET_NODE_IDX else Gf.Vec3f(0.2, 0.2, 0.8)
                 color_attr.Set([color])
 
-    # 4. State Machine e Variabili Loop
+    # 4. State machine and loop variables
     reach_sm = ReachSm(env_cfg.sim.dt * env_cfg.decimation, num_envs, device)
     step_idx = 0
     episode_idx = 1
     lift_pos_env_fixed = None
     actions = torch.zeros(env.unwrapped.action_space.shape, device=device)
-    actions[:, 3] = 1.0 # Gripper chiuso
+    actions[:, 3] = 1.0 # Gripper closed
 
     while simulation_app.is_running():
         with torch.inference_mode():
-            # --- AGGIORNAMENTO FISICA ---
+            # --- PHYSICS UPDATE ---
             step_out = env.step(actions)
             env.unwrapped.scene.update(dt=env_cfg.sim.dt)
             dones = step_out[2] | step_out[3]
 
-            # --- RECUPERO STATO EE E NODI ---
+            # --- EE AND NODE STATE RETRIEVAL ---
             ee_frame_sensor = env.unwrapped.scene["ee_frame"]
             ee_pos_w = ee_frame_sensor.data.target_pos_w[..., 0, :].clone()
             ee_quat_w = ee_frame_sensor.data.target_quat_w[..., 0, :].clone()
             node_491_pos_w = liver.data.nodal_pos_w[:, TARGET_NODE_IDX, :].clone()
             env_origins = env.unwrapped.scene.env_origins
 
-            # --- LOGICA RESET EPISODIO ---
+            # --- EPISODE RESET LOGIC ---
             if dones.any():
                 done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
                 env.unwrapped._reset_idx(done_ids)
 
-                # Log joint positions post-reset (episodio corrente)
+                # Log post-reset joint positions (current episode)
                 joint_pos = robot_asset.data.joint_pos[done_ids].detach().cpu().tolist()
                 print(f"EPISODE {episode_idx}, JOINT POS: {joint_pos}")
-
-                # Reset liver da snapshot ora gestito da EventTerm; teniamo il codice per riferimento
-                # if liver_rest_snapshot is not None:
-                #     state_snapshot = liver_rest_snapshot[done_ids].clone()  # shape: (B, N, 6)
-                #     state_snapshot[..., 3:] = 0.0
-                #     vel_zero = torch.zeros_like(liver.data.nodal_vel_w[done_ids])
-                #     liver.write_nodal_state_to_sim(state_snapshot, done_ids)
-                #     liver.write_nodal_velocity_to_sim(vel_zero, done_ids)
-                #     kin = liver.data.nodal_kinematic_target[done_ids].clone()
-                #     kin[:, :, :3] = state_snapshot[:, :, :3]
-                #     kin[:, :, 3] = 1.0
-                #     liver.write_nodal_kinematic_target_to_sim(kin, done_ids)
-
                 reach_sm.reset_idx(done_ids)
                 lift_pos_env_fixed = None
                 actions.zero_()
@@ -219,19 +203,13 @@ def main():
                 rest_pos_env = ee_pos_w - env_origins
                 rest_quat_w = ee_quat_w.clone()
                 lift_pos_env_fixed = node_491_pos_w - env_origins
-                lift_pos_env_fixed[:, 2] += 0.03 # Lift 3cm
+                lift_pos_env_fixed[:, 2] += 0.03 # Lift by 3 cm
 
-                # Debug: stato liver immediatamente dopo il reset/cattura target
+                # Debug: liver state right after reset/target capture
                 liver.update(env_cfg.sim.dt)
-                pos_err0 = torch.norm(liver.data.nodal_pos_w - liver.data.default_nodal_state_w[..., :3], dim=-1).max().item()
-                vel_max0 = torch.norm(liver.data.nodal_vel_w, dim=-1).max().item()
-                flag_min0 = liver.data.nodal_kinematic_target[..., 3].min().item()
-                flag_max0 = liver.data.nodal_kinematic_target[..., 3].max().item()
                 node491_curr = liver.data.nodal_pos_w[:, 26, :3]
                 node491_def = liver.data.default_nodal_state_w[:, 26, :3]
-                node491_err = torch.norm(node491_curr - node491_def, dim=-1).max().item()
-                dist_ee_node491 = torch.norm(ee_pos_w - node491_curr, dim=-1).max().item()
-                # print(f"[DEBUG STEP0] pos_err_max={pos_err0:.6e} vel_max={vel_max0:.6e} flag_min={flag_min0:.1f} flag_max={flag_max0:.1f} node491_err={node491_err:.6e} dist_ee_node491={dist_ee_node491:.6e}")
+                
 
             nodal_kinematic_target = liver.data.nodal_kinematic_target.clone()
             
@@ -244,39 +222,20 @@ def main():
                 nodal_kinematic_target[:, TARGET_NODE_IDX, 3] = 0.0
             
             liver.write_nodal_kinematic_target_to_sim(nodal_kinematic_target)
-            liver.write_data_to_sim() # Applica i target al solutore PhysX FEM
+            liver.write_data_to_sim() # Apply targets to the PhysX FEM solver
             if step_idx <= 2:
                 liver.update(env_cfg.sim.dt)
-                flag_min_step = nodal_kinematic_target[..., 3].min().item()
-                flag_max_step = nodal_kinematic_target[..., 3].max().item()
-                pos_err_step = torch.norm(liver.data.nodal_pos_w - liver.data.default_nodal_state_w[..., :3], dim=-1).max().item()
-                vel_max_step = torch.norm(liver.data.nodal_vel_w, dim=-1).max().item()
                 node491_curr = liver.data.nodal_pos_w[:, TARGET_NODE_IDX, :3]
                 node491_def = liver.data.default_nodal_state_w[:, TARGET_NODE_IDX, :3]
-                node491_err = torch.norm(node491_curr - node491_def, dim=-1).max().item()
-                dist_ee_node491 = torch.norm(ee_pos_w - node491_curr, dim=-1).max().item()
-                # print(f"[DEBUG STEP {step_idx}] pos_err_max={pos_err_step:.6e} vel_max={vel_max_step:.6e} flag_min={flag_min_step:.1f} flag_max={flag_max_step:.1f} node491_err={node491_err:.6e} dist_ee_node491={dist_ee_node491:.6e}")
+            # print(f"EPISODE {episode_idx} STEP {step_idx+1}: disp_z={disp_z:.6f} m")
 
-            # Snapshot ora gestito da EventTerm; blocco lasciato commentato per riferimento
-            # if liver_rest_snapshot is None and step_idx == 25:
-            #     liver.update(env_cfg.sim.dt)
-            #     liver_rest_snapshot = liver.data.nodal_state_w.clone()
-            #     node491_z = liver.data.nodal_pos_w[0, 491, 2].item()
-            #     print(f"[SNAPSHOT] Salvato nodal_state_w al passo 25 (altezza nodo491 = {node491_z:.6f} m)")
-
-            # Log altezza nodo 491 rispetto al default (displacement verticale)
-            node491_curr = liver.data.nodal_pos_w[:, TARGET_NODE_IDX, 2]
-            node491_default = liver.data.default_nodal_state_w[:, TARGET_NODE_IDX, 2]
-            disp_z = (node491_curr - node491_default).mean().item()
-            # print(f"EPISODIO {episode_idx} PASSO {step_idx+1}: disp_z={disp_z:.6f} m")
-
-            # --- CALCOLO AZIONI (IK) ---
+            # --- ACTION COMPUTATION (IK) ---
             robot_pos_w = robot_asset.data.root_state_w[:, :3]
             robot_quat_w = robot_asset.data.root_state_w[:, 3:7]
             
             reach_pos_env = node_491_pos_w - env_origins
             
-            # Trasformazioni in frame robot
+            # Transformations into robot frame
             rest_pos_b, rest_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, rest_pos_env, rest_quat_w)
             reach_pos_b, reach_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, reach_pos_env, rest_quat_w)
             lift_pos_b, lift_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, lift_pos_env_fixed, rest_quat_w)
@@ -290,9 +249,9 @@ def main():
             # Debugging
             if step_idx % 50 == 0:
                 state_names = {0: "REST", 1: "REACH", 2: "LIFT"}
-                # print(f"[Step {step_idx}] Stato: {state_names[current_state]} | Dist EE-Nodo491: {distance_to_node[0].item():.5f}m")
+                # print(f"[Step {step_idx}] State: {state_names[current_state]} | Dist EE-Node491: {distance_to_node[0].item():.5f}m")
 
-            # Aggiorna la posa dei marker nodali (se non headless; tutti se world_ref_vis, altrimenti solo 26)
+            # Update nodal marker poses (if not headless; all with world_ref_vis, otherwise only node 26)
             if not args_cli.headless and step_idx % 2 == 0:
                 from pxr import UsdGeom, Gf
                 import isaacsim.core.utils.stage as stage_utils

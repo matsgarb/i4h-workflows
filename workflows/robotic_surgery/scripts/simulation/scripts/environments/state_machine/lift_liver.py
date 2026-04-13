@@ -112,17 +112,6 @@ class ReachSm:
 def get_gallbladder_mask(rgb_image):
     img = rgb_image.astype(np.float32)
     r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
-    
-    # # OLD GB MASK
-    # is_not_gray = (np.abs(g - r) > 5) | (np.abs(g - b) > 5)
-    # mask_range = (r >= 5) & (r <= 110) & \
-    #              (g >= 15) & (g <= 125) & \
-    #              (b >= 3)  & (b <= 95)
-    # green_dominant = (g > r) & (g > b)
-    # final_mask = (is_not_gray & mask_range & green_dominant).astype(np.uint8) * 255
-    
-    # NEW GB MASK 
-    # Basic range for the colors (including lighter tones)
     r_range = (r >= 0) & (r <= 50)
     g_range = (g >= 40) & (g <= 165)
     b_range = (b >= 45) & (b <= 165)
@@ -150,21 +139,15 @@ def main():
     # 1. Load config
     env_cfg: ReachEnvCfg = parse_env_cfg("Isaac-Liver-PSM-IK-Abs-v0", device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric)
     
-    # 2. Define the exact joint positions we want (8 joints)
-    # yaw, pitch, insertion, tool_roll, tool_pitch, tool_yaw, gripper1, gripper2
-    # NEW_RESET_JOINTS = [0.18, 0.1, 0.11, 0.0, 0.0, 0.0, -0.09, 0.09] # [-0.0, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09]
-    # [-0.0, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09] when psm pos is pos=(0.02, 0.02, 0.08)
-    # [-0.25, 0.1, 0.16, 0.0, 0.0, 0.0, -0.09, 0.09] when psm pos is pos=(0.02, 0.02, 0.05)
-    
+    # # 2. Define the exact joint positions we want (8 joints = yaw, pitch, insertion, tool_roll, tool_pitch, tool_yaw, gripper1, gripper2)
+    # NEW_RESET_JOINTS = [0.18, 0.1, 0.11, 0.0, 0.0, 0.0, -0.09, 0.09] 
     # # This overrides the 'default' position used by mdp.reset_joints_by_scale
     # # ----- DIRECT KINEMATIC SETTING OF JOINT POSITIONS -----
     # new_reset_tensor = torch.tensor(NEW_RESET_JOINTS, device=args_cli.device).repeat(args_cli.num_envs, 1) 
     # robot_asset.data.default_joint_pos[:] = new_reset_tensor
-
     # zeros_vel = torch.zeros_like(new_reset_tensor)
     # robot_asset.write_joint_state_to_sim(new_reset_tensor, zeros_vel)
     # # --------------------------------------------------
-    
     # # Manually move the robot
     # zeros_vel = torch.zeros_like(new_reset_tensor)
     # robot_asset.write_joint_state_to_sim(new_reset_tensor, zeros_vel)

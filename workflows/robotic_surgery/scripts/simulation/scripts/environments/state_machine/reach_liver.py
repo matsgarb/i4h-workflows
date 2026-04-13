@@ -213,8 +213,6 @@ def main():
     #     print(f"✗ Camera not found: {e}")
     #     camera = None
     
-    pos_threshold = 0.002
-    or_threshold = 0.1
     step_idx = 0
     
     # Create output directory for images
@@ -233,18 +231,11 @@ def main():
     liver = env.unwrapped.scene["liver"]
     nodal_pos_env = liver.data.nodal_pos_w[0] # n_vertices x 3 [i_vertice, [xi yi zi]]]
     anchor_idx = 319 # OLD MESH (onlyliver.usd), resolution = 8
-    anchor_idx = 3 # final_organs_5
-    # anchor_idx = 335 # NEW MESH (liver_and_gallbladder.usd, resolution = 10)
-    # anchor_idx = 26 # NEW MESH (liver_and_gallbladder.usd, resolution = 8), target point on the surface of the liver
-
-    # anchor_idx = 331 # NEW MESH (liver_and_gallbladder.usd, resolution = 9), target point below the liver
-    # anchor_idx = 286 # NEW MESH (liver_and_gallbladder.usd, resolution = 9), targer point on the surface of the liver
+    anchor_idx = 3 
     robot = env.unwrapped.scene["robot"]
     print("Joint names: ", robot.data.joint_names)
     print("Joint pos limits (lower, upper): ")
     print(robot.data.joint_pos_limits)
-
-    # print("Anchor node index:",nodal_pos_env.size())
     num_nodes = nodal_pos_env.shape[0]
 
     # FRAME VISUALIZATION
@@ -263,17 +254,6 @@ def main():
         ee_frame_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/EEFrame")
         ee_frame_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
         ee_frame_vis = VisualizationMarkers(ee_frame_cfg)
-
-        # # Object frame
-        # object_frame_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/ObjectFrame")
-        # object_frame_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
-        # object_frame_vis = VisualizationMarkers(object_frame_cfg)
-
-        # # TO VISUALIZE LIVER NODES (simulation mesh) OLD 
-        # desired_pose_vis = VisualizationMarkers(
-        #     POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/DesiredPose"))
-        # nodes_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/LiverNodes")
-        # liver_nodes_vis = VisualizationMarkers(nodes_cfg)
 
         # TO VISUALIZE LIVER NODES (simulation mesh) UPDATED
         if not args_cli.headless and args_cli.world_ref_vis:
@@ -301,8 +281,6 @@ def main():
         insert_target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/InsertTarget")
         insert_target_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
         insert_target_vis = VisualizationMarkers(insert_target_cfg)
-        # insert_target_cfg = POSITION_GOAL_MARKER_CFG.replace(prim_path="/Visuals/InsertTarget")
-        # insert_target_vis = VisualizationMarkers(insert_target_cfg)
 
         # Lift target marker
         lift_target_cfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/LiftTarget")
@@ -388,15 +366,6 @@ def main():
             nodal_pos_w = liver.data.nodal_pos_w
             anchor_pos_w = nodal_pos_w[:, anchor_idx, :]
             env_origins = env.scene.env_origins
-            
-            # OLD: anchor_pos_env = anchor_pos_w - env_origins
-            # OLD: dz = 0.008 #0.007
-            # OLD: approach_pos_w = anchor_pos_w + torch.tensor([0.0, 0.0, -dz], device = env.unwrapped.device)
-            # OLD: approach_pos_env = approach_pos_w - env_origins
-            # OLD: anchor_pos_env = approach_pos_env
-            # NEW: keep reach z fixed to the initial/default nodal height, allow x/y to follow the deformable
-            
-            # dz = 0.007 # |0.008| ##0.007
             dz = -0.025
             default_anchor_pos = liver.data.default_nodal_state_w[:, anchor_idx, :3].to(anchor_pos_w.device)
             reach_pos_w = anchor_pos_w.clone()
@@ -444,26 +413,6 @@ def main():
             desired_quat_w_single = quat_mul(quat_w_single, q_yaw)
             desired_quat_w_single = liver_target_pose_world(env.unwrapped, object_cfg=SceneEntityCfg("liver"))[0, 3:7]  # Override with orientation from rewards.py
             desired_quat_w = desired_quat_w_single.repeat(env.unwrapped.num_envs, 1)
-            
-            '''
-            # Desired orientation
-            # nodal_pos_w = liver.data.nodal_pos_w
-            # bary_pos_w = nodal_pos_w.mean(dim=1)
-            bary_pos_w = liver.data.root_pos_w
-            z_axis = - (bary_pos_w - approach_pos_w)
-            z_axis = z_axis / (torch.norm(z_axis, dim = 1, keepdim = True) + 1e-8)
-            world_x = torch.tensor([1.0, 0.0, 0.0], device = env.unwrapped.device).repeat(env.unwrapped.num_envs, 1)
-            world_y = torch.tensor([0.0, 1.0, 0.0], device = env.unwrapped.device).repeat(env.unwrapped.num_envs, 1)
-            dot_x = torch.abs((z_axis*world_x).sum(dim=1, keepdim=True))
-            ref_axis = torch.where(dot_x > 0.95, world_y, world_x)
-            x_axis = ref_axis - (ref_axis*z_axis).sum(dim=1, keepdim=True)*z_axis
-            x_axis = x_axis / (torch.norm(x_axis, dim=1, keepdim=True) + 1e-8)
-            y_axis = torch.cross(z_axis, x_axis, dim=1)
-            y_axis = y_axis / (torch.norm(y_axis, dim=1, keepdim=True) + 1e-8)
-            R = torch.stack([x_axis, y_axis, z_axis], dim=-1)
-            desired_quat_w = quat_from_matrix(R)
-            '''
-            
             desired_pos_b, desired_quat_b = subtract_frame_transforms(
                 robot_pos_w, robot_quat_w, anchor_pos_env, desired_quat_w
             )
@@ -485,12 +434,8 @@ def main():
             insert_pos_b, insert_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, insert_pos_env, desired_quat_w)
             pose_insert = torch.cat([insert_pos_b, insert_quat_b], dim=-1)
             
-            d_lift = 0.03 # 0.08
-            # # LIFT OLD
-            # lift_pos_env = insert_pos_env + torch.tensor([0.0, 0.0, d_lift], device=device, dtype=torch.float32).repeat(num_envs,1)
-            # lift_pos_b, lift_quat_b = subtract_frame_transforms(robot_pos_w, robot_quat_w, lift_pos_env, desired_quat_w)
-            # pose_lift = torch.cat([lift_pos_b, lift_quat_b], dim=-1)
-            
+            d_lift = 0.03 
+
             # LIFT NEW
             lift_pos_w_fixed = default_anchor_pos.clone()
             lift_pos_w_fixed[:, 2] += d_lift
@@ -546,18 +491,6 @@ def main():
             except Exception as e:
                 print("[DEBUG] transition reward error:", e)
 
-            # try:
-            #     # Final success
-            #     robot_body_idx = robot.find_bodies("psm_tool_tip_link")[0]
-            #     r_success = mdp.final_success_reward(
-            #         env.unwrapped,
-            #         asset_cfg=SceneEntityCfg("robot", body_ids=robot_body_idx),
-            #         object_cfg=SceneEntityCfg("liver"),
-            #     )
-            #     print(f"success       : {r_success}")
-            # except Exception as e:
-            #     print("[DEBUG] success reward error:", e)
-
             try:
                 # Action rate penalty 
                 r_action_rate = mdp.action_rate_l2(env.unwrapped)
@@ -592,7 +525,6 @@ def main():
                 # robot_frame_vis.visualize(robot_pos_w, robot_quat_w)
                 ee_frame_vis.visualize(ee_pos_w, ee_quat_w)
                 
-                # NEW
                 # object_pos_w = liver.data.root_pos_w
                 # object_quat_w = world_quat
                 # object_frame_vis.visualize(object_pos_w, object_quat_w)
@@ -606,13 +538,14 @@ def main():
                 node_quats = torch.zeros((num_nodes,4),device=env.unwrapped.device)
                 node_quats[:,0] = 1.0
                 nodes_indices = torch.zeros(num_nodes,dtype=torch.int32,device=env.unwrapped.device)
+                
                 # # OLD
-                # # liver_nodes_vis.visualize(nodal_pos_w, node_quats, marker_indices=nodes_indices)
+                # liver_nodes_vis.visualize(nodal_pos_w, node_quats, marker_indices=nodes_indices)
 
                 # UPDATED
                 if not args_cli.headless and args_cli.world_ref_vis and step_idx % 2 == 0:
                     from pxr import Gf, UsdGeom
-                    curr_stage = stage_utils.get_current_stage() # Assicuriamoci di avere lo stage
+                    curr_stage = stage_utils.get_current_stage()
                     for i in range(num_nodes):
                         node_path = f"/Visuals/LiverNodesList/Node_{i}"
                         pos = nodal_pos_w[i].tolist()

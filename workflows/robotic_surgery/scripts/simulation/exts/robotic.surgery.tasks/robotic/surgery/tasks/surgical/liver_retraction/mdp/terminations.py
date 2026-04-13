@@ -12,8 +12,8 @@ def achieved_target(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
-    pos_threshold: float = 0.002, # 0.005
-    or_threshold: float = 0.2, # 0.1
+    pos_threshold: float = 0.002,
+    or_threshold: float = 0.2,
 ) -> torch.Tensor:
     
     pos_err = object_ee_distance(env, asset_cfg=asset_cfg, object_cfg=object_cfg)
