@@ -167,7 +167,6 @@ class PSMReachEnvCfg(ReachEnvCfg):
             mode="reset",
             params={
                 # per-joint ranges: [yaw, pitch, insertion, roll, pitch, yaw, gripper 1, gripper 2]
-                # (-0.2, 0.2) for reach STATE based, (-0.1, 0.1) for reach IMAGE based,  (0, 0) for lift
                 "position_ranges": [
                     (-0.2, 0.2),  # yaw
                     (-0.2, 0.2),  # pitch
